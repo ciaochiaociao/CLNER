@@ -208,7 +208,8 @@ class ConfigParser:
 		if pretrained:
 			if is_student and 'pretrained_model' in config:
 				base_path=Path(config['target_dir'])/config['pretrained_model']
-			base_path=Path(config['target_dir'])/config['model_name']
+			else:
+				base_path=Path(config['target_dir'])/config['model_name']
 
 			if (base_path / "best-model.pt").exists():
 				log.info('Loading pretraining best model')
