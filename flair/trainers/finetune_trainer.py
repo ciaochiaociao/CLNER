@@ -2129,26 +2129,27 @@ class ModelFinetuner(ModelDistiller):
 			if (hasattr(embedding,'fine_tune') and embedding.fine_tune):
 				embedding.fine_tune = False
 		if overall_test:
-			loader=ColumnDataLoader(list(self.corpus.test),eval_mini_batch_size, use_bert=self.use_bert,tokenizer=self.bert_tokenizer, model = self.model, sentence_level_batch = self.sentence_level_batch, sort_data=sort_data)
-			loader.assign_tags(self.model.tag_type,self.model.tag_dictionary)
-			with torch.no_grad():
-				# pdb.set_trace()
-				self.gpu_friendly_assign_embedding([loader])
-			for x in sorted(loader[0].features.keys()):
-				print(x)
-			test_results, test_loss = self.model.evaluate(
-				loader,
-				out_path=base_path / "test.tsv",
-				embeddings_storage_mode="cpu",
-			)
-			test_results: Result = test_results
-			log.info(test_results.log_line)
-			log.info(test_results.detailed_results)
-			log_line(log)
-			# if self.model.embedding_selector:
-			#   print(sorted(loader[0].features.keys()))
-			#   print(self.model.selector)
-			#   print(torch.argmax(self.model.selector,-1))
+			for subset in ('train', 'dev', 'test'):
+				loader=ColumnDataLoader(list(getattr(self.corpus, subset)),eval_mini_batch_size, use_bert=self.use_bert,tokenizer=self.bert_tokenizer, model = self.model, sentence_level_batch = self.sentence_level_batch, sort_data=sort_data)
+				loader.assign_tags(self.model.tag_type,self.model.tag_dictionary)
+				with torch.no_grad():
+					# pdb.set_trace()
+					self.gpu_friendly_assign_embedding([loader])
+				for x in sorted(loader[0].features.keys()):
+					print(x)
+				test_results, test_loss = self.model.evaluate(
+					loader,
+					out_path=base_path / f"{subset}.tsv",
+					embeddings_storage_mode="cpu",
+				)
+				test_results: Result = test_results
+				log.info(test_results.log_line)
+				log.info(test_results.detailed_results)
+				log_line(log)
+				# if self.model.embedding_selector:
+				#   print(sorted(loader[0].features.keys()))
+				#   print(self.model.selector)
+				#   print(torch.argmax(self.model.selector,-1))
 		if quiet_mode:
 			enablePrint()
 			if overall_test:

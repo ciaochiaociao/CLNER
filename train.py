@@ -83,6 +83,8 @@ if args.test and args.zeroshot:
 config = ConfigParser(config,all=args.all,zero_shot=args.zeroshot,other_shot=args.other,predict=args.predict)
 # pdb.set_trace()
 
+from pprint import pprint
+pprint(args)
 
 student=config.create_student(nocrf=args.nocrf)
 log.info(f"Model Size: {count_parameters(student)}")
