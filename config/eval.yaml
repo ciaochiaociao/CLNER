@@ -1,0 +1,44 @@
+# model_name: xlmr-first_20epoch_2batch_2accumulate_0.000005lr_10000lrrate_eng_monolingual_crf_fast_norelearn_sentbatch_sentloss_finetune_nodev_globalner@N-google@Q-sent@S-title_and_snippet_separately@R-mentionscore+bertscore1/eval_on_globalner@N-google@Q-sent@S-title_and_snippet_separately@R-mentionscore+bertscore@V-2.3.0@C-v3.0
+model_name: null
+load_pretrained: true
+# pretrained_model: xlmr-first_20epoch_2batch_2accumulate_0.000005lr_10000lrrate_eng_monolingual_crf_fast_norelearn_sentbatch_sentloss_finetune_nodev_globalner@N-google@Q-sent@S-title_and_snippet_separately@R-mentionscore+bertscore1
+pretrained_model: null
+ner:
+  ColumnCorpus-WNUTDOCFULL:
+    column_format:
+      0: text
+      1: ner
+    # data_folder: /home/cwhsutw1/.flair/datasets/globalner@N-google@Q-sent@S-title_and_snippet_separately@R-mentionscore+bertscore
+    data_folder: null
+    tag_to_bioes: ner
+  Corpus: ColumnCorpus-WNUTDOCFULL
+  tag_dictionary: resources/taggers/aug_wnut_ner_tags.pkl
+embeddings:
+  TransformerWordEmbeddings-0:
+    doc_batch_size: 2
+    fine_tune: true
+    layers: '-1'
+    model: xlm-roberta-large
+    pooling_operation: first
+model:
+  FastSequenceTagger:
+    crf_attention: false
+    dropout: 0.0
+    hidden_size: 256
+    locked_dropout: 0.0
+    remove_x: true
+    sentence_loss: true
+    use_cnn: false
+    use_crf: true
+    use_rnn: false
+    word_dropout: 0.1
+# target_dir: resources/taggers@V-alpha1@J-new
+target_dir: null
+targets: ner
+train:
+  mini_batch_size: 2
+  train_with_dev: false
+trainer: ModelFinetuner
+ModelFinetuner:
+  distill_mode: false
+  sentence_level_batch: true
