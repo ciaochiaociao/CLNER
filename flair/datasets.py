@@ -1,3 +1,4 @@
+from copy import deepcopy
 import os, csv
 import json
 from abc import abstractmethod
@@ -11,7 +12,7 @@ import torch.utils.data.dataloader
 from torch.utils.data.dataset import Subset, ConcatDataset
 
 import flair
-from flair.data import Sentence, Corpus, Token, FlairDataset
+from flair.data import Label, Sentence, Corpus, Token, FlairDataset
 from flair.file_utils import cached_path
 import pdb
 
@@ -29,6 +30,7 @@ class ColumnCorpus(Corpus):
         tag_to_bioes=None,
         comment_symbol: str = None,
         in_memory: bool = True,
+        **kwargs,
     ):
         """
         Instantiates a Corpus from CoNLL column-formatted task data such as CoNLL03 or CoNLL2000.
@@ -90,6 +92,7 @@ class ColumnCorpus(Corpus):
             tag_to_bioes,
             comment_symbol=comment_symbol,
             in_memory=in_memory,
+            **kwargs,
         )
 
         # read in test file if exists, otherwise sample 10% of train data as test dataset
@@ -100,6 +103,7 @@ class ColumnCorpus(Corpus):
                 tag_to_bioes,
                 comment_symbol=comment_symbol,
                 in_memory=in_memory,
+                **kwargs,
             )
         else:
             train_length = len(train)
@@ -116,6 +120,7 @@ class ColumnCorpus(Corpus):
                 tag_to_bioes,
                 comment_symbol=comment_symbol,
                 in_memory=in_memory,
+                **kwargs,
             )
         else:
             train_length = len(train)
@@ -857,6 +862,10 @@ class ColumnDataset(FlairDataset):
         tag_to_bioes: str = None,
         comment_symbol: str = None,
         in_memory: bool = True,
+
+        # cwhsu
+        second_comment_symbol: str = None,
+        comment_line_format: Dict[int, dict] = None,
     ):
         """
         Instantiates a column dataset (typically used for sequence labeling or word-level prediction).
@@ -873,6 +882,12 @@ class ColumnDataset(FlairDataset):
         self.tag_to_bioes = tag_to_bioes
         self.column_name_map = column_name_map
         self.comment_symbol = comment_symbol
+
+        # cwhsu
+        if comment_line_format is None:
+            comment_line_format = {}
+        self.comment_line_format = comment_line_format
+        self.second_comment_symbol = second_comment_symbol
 
         # store either Sentence objects in memory, or only file offsets
         self.in_memory = in_memory
@@ -912,6 +927,40 @@ class ColumnDataset(FlairDataset):
             while line:
                 if self.comment_symbol is not None and line.startswith(comment_symbol):
                     line = f.readline()
+
+                    # ==== Add sentence-wise features and labels by cwhsu ====
+                    #   0:
+                    #     name: nkj  # ner / nss / nts / rec_span
+                    #     type: label  # tag
+                    #     value_type: gold  # categorical / numerical
+                    #     level: sent  # token
+                    #     scope: local  # nonlocal
+                    # note - flair only supports sentence labeling, token sequence tagging, 
+                    if line.startswith(self.second_comment_symbol): 
+                        _comment_fields = re.split("\s+", line[len(comment_symbol):].strip())
+                        for i in range(len(_comment_fields)):
+                            _field = self.comment_line_format[i]
+                            value = _comment_fields[i]
+
+                            # add labels to sentnece
+                            if _field['level'] == 'sent':
+                                if _field['type'] == 'tag':
+                                    # a single-choice / multiple classification problem
+                                    # answer: A / B / C / D
+                                    assert ":" in _field['value']
+                                    assert _field['name'] == _field['value'].split(':')[0]
+                                    assert hasattr(sentence, 'tags')
+                                    sentence.tags[_field['name']] = Label(value)
+                                elif _field['type'] == 'label':
+                                    # a labeling / binary classificaiton problem (or a multi-choice)
+                                    label = Label(_field['name'])
+                                else:
+                                    raise ValueError
+                                label.name = _field['name']
+                                label.scope = _field['scope']
+                                label.value_type = _field['value_type']
+                        import pdb; pdb.set_trace()
+                    # ==========================================================
                     continue
                 
                 if line.isspace():
@@ -922,13 +971,15 @@ class ColumnDataset(FlairDataset):
                                 sentence.convert_tag_scheme(
                                     tag_type=self.tag_to_bioes, target_scheme="iobes"
                                 )
+                            # === cwhsu ===
+                            # =============
                             self.sentences.append(sentence)
                         else:
                             self.indices.append(position)
                             position = f.tell()
                         self.total_sentence_count += 1
                     sentence: Sentence = Sentence()
-
+                    sentence.tags = {}  # by cwhsu for sentence to do both "multiple and single-choice problem"
                 else:
                     fields: List[str] = re.split("\s+", line)
                     token = Token(fields[self.text_column])

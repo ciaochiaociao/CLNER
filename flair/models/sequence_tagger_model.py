@@ -251,14 +251,6 @@ class SequenceTagger(flair.nn.Model):
 		self.calculate_l2_loss = calculate_l2_loss
 		self.l2_loss_only = l2_loss_only
 
-		# multi-tasking (by cwhsu)
-		if with_tasks is None: with_tasks = {}
-		self.with_tasks = with_tasks
-		for task in with_tasks:
-			setattr(self, task + '_num_labels', len(self.with_tasks[task]['labels']))
-
-		# for task in with_tasks:
-		# 	setattr(self, 'with_' + task, True)
 		
 		# pdb.set_trace()
 
@@ -398,28 +390,32 @@ class SequenceTagger(flair.nn.Model):
 			)
 
 		# ============ for other tasks ============
-		
+		# multi-tasking (by cwhsu)
 		_need_sent_feat = False
-		for task, params in self.with_tasks.items():
-			# _decoder_params = list(params['decode'].items())
-			# assert len(_decoder_params) == 1
-			# _decoder_class, _params = _decoder_params[0]
-			# _decoder = _decoder_class(_params)
-
-			# get parameter from 
-			_decode = torch.nn.Linear(
-				self.embeddings.embedding_length, getattr(self, task + '_num_labels')
-			)
-			setattr(self, task + '_decode', _decoder)
-
-			# fixed loss function
-			if task == 'nkj':
-				_need_sent_feat = True
-				setattr(self, task + '_loss_function', nn.CrossEntropyLoss())
+		if with_tasks is None: with_tasks = {}
+		self.with_tasks = with_tasks
+		if self.with_tasks:
+			self.modules_for_other_tasks = torch.nn.ModuleDict()
+			for task, params in self.with_tasks.items():
+				self.modules_for_other_tasks[task] = torch.nn.ModuleDict()
+				if task == 'labeling':
+					self.num_labels = len(params['labels'])
+					# get parameter from 
+					self.modules_for_other_tasks[task]['decoder'] = torch.nn.Linear(
+						self.embeddings.embedding_length, self.num_labels
+					)
+					_need_sent_feat = True
+					self.modules_for_other_tasks[task]['loss_function'] = torch.nn.CrossEntropyLoss()
+				elif task == 'classification':
+					_need_sent_feat = True
+					...
+				elif task == 'tagging':
+					...
 
 		if _need_sent_feat:
 			self.embeddings.embeddings[0].sentence_feat = True
 
+		# ============ for other tasks ============
 		if self.use_crf:
 			if self.enhanced_crf:
 				self.transitions = torch.nn.Parameter(
@@ -568,7 +564,7 @@ class SequenceTagger(flair.nn.Model):
 			multi_view_training = False if "multi_view_training" not in state else state["multi_view_training"],
 			calculate_l2_loss = False if "calculate_l2_loss" not in state else state["calculate_l2_loss"],
 			l2_loss_only = False if "l2_loss_only" not in state else state["l2_loss_only"],
-			with_nkj = False if 'with_nkj' not in state else state["with_nkj"],
+			with_tasks = False if 'with_tasks' not in state else state["with_tasks"],
 		)
 		model.load_state_dict(state["state_dict"])
 		return model
@@ -737,34 +733,8 @@ class SequenceTagger(flair.nn.Model):
 	) -> torch.tensor:
 
 		features = self.forward(data_points)
-		if len(self.with_tasks):
-			features, _other_feats = features
-		_loss = self._calculate_loss(features, data_points)
-		for task in self.with_tasks:
-			_loss += getattr(self, f"_calculate_{task}_loss")(_other_feats[task], data_points)
-		return _loss
-
-	# =============================== NKJ ===============================
-	def _calculate_nkj_loss(self, label_scores, sentences):
-		"""copied from text_classification_model.py by cwhsu"""
-		return self.nkj_loss_function(label_scores, self._labels_to_indices(self.with_tasks['nkj']['labels'], sentences))
-
-	def _labels_to_indices(self, labels, sentences: List[Sentence]):
-		"""copied from text_classification_model.py by cwhsu"""
-		indices = [
-            torch.LongTensor(
-                [
-                    labels.index(label.value)
-                    for label in sentence.labels
-                ]
-            )
-            for sentence in sentences
-        ]
-
-		vec = torch.cat(indices, 0).to(flair.device)
-
-		return vec
-	# =============================== NKJ ===============================
+		loss = self._calculate_loss(features, data_points)
+		return loss
 
 	def simple_forward_distillation_loss(
 		self, data_points: Union[List[Sentence], Sentence], teacher_data_points: Union[List[Sentence], Sentence]=None, teacher=None, sort=True,
@@ -1096,8 +1066,8 @@ class SequenceTagger(flair.nn.Model):
 		if len(self.with_tasks):
 			_other_feats = {}
 			for task in self.with_tasks:
-				if task == 'nkj':
-					_feats = getattr(self, task, '_decode')(self.embeddings.embeddings[0].pooled_output)
+				if task == 'labeling':
+					_feats = self.modules_for_other_tasks[task]['decoder'](self.embeddings.embeddings[0].pooled_output)
 				else:
 					raise ValueError(task)
 				_other_feats[task] = _feats
@@ -1981,9 +1951,18 @@ class FastSequenceTagger(SequenceTagger):
 		# lengths = [len(sentence.tokens) for sentence in data_points]
 		# longest_token_sequence_in_batch: int = max(lengths)
 
+		# ========================== cwhsu ==========================
+		if len(self.with_tasks):
+			features, _other_feats = features
+		loss = self._calculate_loss(features, data_points, self.mask)
+		for task in self.with_tasks:
+			loss_fct = self.modules_for_other_tasks[task]['loss_function']
+			labels = self._labels_to_indices(data_points, self.with_tasks[task]['labels'])
+			loss += loss_fct(_other_feats[task], labels)
+		# ========================== cwhsu ==========================
+
 		# max_len = features.shape[1]
 		# mask=self.sequence_mask(torch.tensor(lengths), max_len).cuda().type_as(features)
-		loss = self._calculate_loss(features, data_points, self.mask)
 
 		# if temp:
 		#   print(features.sum())
@@ -1994,9 +1973,29 @@ class FastSequenceTagger(SequenceTagger):
 		#       log.info(f'{temp_loss}')
 		if return_features:
 			return loss, features
-			
+
+
 			#   # loss = interpolation * distillation_loss + (1-interpolation) * target_loss
 		return loss	
+
+	# =============================== labeling ===============================
+
+	def _labels_to_indices(self, sentences: List[Sentence], labels):
+		"""copied from text_classification_model.py by cwhsu"""
+		indices = [
+            torch.LongTensor(
+                [
+                    labels.index(label.value)
+                    for label in sentence.labels
+                ]
+            )
+            for sentence in sentences
+        ]
+
+		vec = torch.cat(indices, 0).to(flair.device)
+
+		return vec
+	# =============================== labeling ===============================
 
 	def multi_view_loss(self, data_points: Union[List[Sentence], Sentence], features, tag_list, sort=True):
 		# if self.multi_view_training:
