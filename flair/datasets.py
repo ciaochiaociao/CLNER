@@ -867,6 +867,7 @@ class ColumnDataset(FlairDataset):
         :param comment_symbol: if set, lines that begin with this symbol are treated as comments
         :param in_memory: If set to True, the dataset is kept in memory as Sentence objects, otherwise does disk reads
         """
+        # import pdb; pdb.set_trace()
         assert path_to_column_file.exists()
         self.path_to_column_file = path_to_column_file
         self.tag_to_bioes = tag_to_bioes
@@ -932,6 +933,7 @@ class ColumnDataset(FlairDataset):
                 else:
                     fields: List[str] = re.split("\s+", line)
                     token = Token(fields[self.text_column])
+
                     for column in column_name_map:
                         if len(fields) > column:
                             if column != self.text_column:

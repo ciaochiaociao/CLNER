@@ -5,6 +5,7 @@ from abc import abstractmethod
 from collections import Counter
 from pathlib import Path
 from typing import List, Union, Dict
+import yaml
 
 import gensim
 import numpy as np
@@ -935,13 +936,13 @@ class FastTextEmbeddings(TokenEmbeddings):
     def extra_repr(self):
         return f"'{self.embeddings}'"
 
-
 class OneHotEmbeddings(TokenEmbeddings):
     """One-hot encoded embeddings."""
 
     def __init__(
         self,
-        corpus=Union[Corpus, List[Sentence]],
+        corpus: Union[Corpus, List[Sentence]] = None,
+        tokens: List[str] = None,
         field: str = "text",
         embedding_length: int = 300,
         min_freq: int = 3,
@@ -951,23 +952,25 @@ class OneHotEmbeddings(TokenEmbeddings):
         self.name = "one-hot"
         self.static_embeddings = False
         self.min_freq = min_freq
+        self.field = field
 
-        tokens = list(map((lambda s: s.tokens), corpus.train))
-        tokens = [token for sublist in tokens for token in sublist]
+        if corpus is not None:
+            tokens = list(map((lambda s: s.tokens), corpus.train))
+            tokens = [token for sublist in tokens for token in sublist]
 
-        if field == "text":
-            most_common = Counter(list(map((lambda t: t.text), tokens))).most_common()
-        else:
-            most_common = Counter(
-                list(map((lambda t: t.get_tag(field)), tokens))
-            ).most_common()
+            if field == "text":
+                most_common = Counter(list(map((lambda t: t.text), tokens))).most_common()
+            else:
+                most_common = Counter(
+                    list(map((lambda t: t.get_tag(field)), tokens))
+                ).most_common()
 
-        tokens = []
-        for token, freq in most_common:
-            if freq < min_freq:
-                break
-            tokens.append(token)
-
+            tokens = []
+            for token, freq in most_common:
+                if freq < min_freq:
+                    break
+                tokens.append(token)
+        assert isinstance(tokens, list) and len(tokens) != 0
         self.vocab_dictionary: Dictionary = Dictionary()
         for token in tokens:
             self.vocab_dictionary.add_item(token)
@@ -990,26 +993,52 @@ class OneHotEmbeddings(TokenEmbeddings):
 
     def _add_embeddings_internal(self, sentences: List[Sentence]) -> List[Sentence]:
 
+        # get batched features for sentences from saved token embeddings and save to features attribute
+        # without calling forward() again to save computations (by cwhsu)
+        # --- copied from TransformerWordEmbeddings ---
+        # if hasattr(sentences, 'features'):
+        #     # if self.static_embeddings:
+        #     print('>>> Get One Hot features from saved ones')
+        #     if self.name in sentences.features:
+        #         return sentences
+        #     if len(sentences)>0:
+        #         if self.name in sentences[0][0]._embeddings.keys():
+        #             sentences = self.assign_batch_features(sentences)
+        #             return sentences
+        # --- copied from TransformerWordEmbeddings ---
+
         one_hot_sentences = []
         for i, sentence in enumerate(sentences):
-            context_idxs = [
-                self.vocab_dictionary.get_idx_for_item(t.text) for t in sentence.tokens
-            ]
+
+            if self.field == "text":
+                context_idxs = [
+                    self.vocab_dictionary.get_idx_for_item(t.text)
+                    for t in sentence.tokens
+                ]
+            else:
+                context_idxs = [
+                    self.vocab_dictionary.get_idx_for_item(t.get_tag(self.field).value)
+                    for t in sentence.tokens
+                ]
 
             one_hot_sentences.extend(context_idxs)
 
         one_hot_sentences = torch.tensor(one_hot_sentences, dtype=torch.long).to(
             flair.device
         )
-
+        self.to(flair.device)
         embedded = self.embedding_layer.forward(one_hot_sentences)
-
         index = 0
         for sentence in sentences:
             for token in sentence:
                 embedding = embedded[index]
                 token.set_embedding(self.name, embedding)
                 index += 1
+
+        # --- copied from TransformerWordEmbeddings --- (by cwhsu)
+        if hasattr(sentences, 'features'):
+            self.assign_batch_features(sentences)
+        # --- copied from TransformerWordEmbeddings ---
 
         return sentences
 
@@ -2903,6 +2932,8 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         v2_doc: bool = False,
         ext_doc: bool = False,
         sentence_feat: bool = False,
+        use_relative_positions_for_nonlocals: bool = False,  # by cwhsu
+        custom_embeddings_params = None,  # by cwhsu
         **kwargs
     ):
         """
@@ -2926,11 +2957,48 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         import os
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+        self.use_relative_positions_for_nonlocals = use_relative_positions_for_nonlocals  # by cwhsu
+
         # load tokenizer and transformer model
-        
         self.tokenizer = AutoTokenizer.from_pretrained(model, **kwargs)
         config = AutoConfig.from_pretrained(model, output_hidden_states=True, **kwargs)
         self.model = AutoModel.from_pretrained(model, config=config, **kwargs)
+
+        # ======================== custom embedding ==========================
+        # {
+        #   'tag': {
+        #       'attr_name': 'tag_embeddings',  # auto
+        #       'vocab': ['B-location', 'O', ...],
+        #       'params': {
+        #           'embedding_dim': 1024,  # auto
+        #           'num_embeddings': 26,  # auto
+        #           'padding_idx': 1,  # auto
+        #       },
+        #   },
+        #   ...
+        # }
+        if custom_embeddings_params is not None:
+            for field, item in custom_embeddings_params.items():
+                if 'attr_name' not in item:
+                    item['attr_name'] = field + '_embeddings'
+                    if 'params' not in item:
+                        item['params'] = {}
+                    item['params']['padding_idx'] = 1
+                    item['params']['embedding_dim'] = self.model.embeddings.word_embeddings.embedding_dim
+
+                    # include padding token (default id: 1, fixed embedding), and other special tokens like bos and eos (default id: 0)
+                    item['params']['num_embeddings'] = len(item['vocab']) + 2
+
+            self.custom_embeddings_params = custom_embeddings_params
+            log.info('=============== CUSTOM EMBEDDINGS ===============\n' + yaml.dump(custom_embeddings_params))
+
+            self.model.embeddings.custom_embeddings = torch.nn.ModuleDict()
+            for field, item in custom_embeddings_params.items():
+                _embedding = torch.nn.Embedding(**item['params'], 
+                    _weight=torch.zeros(item['params']['num_embeddings'], item['params']['embedding_dim'])
+                )  # zeros initialization embeddings to avoid deteriorating the originla embeddings based on experimental experiences.
+                self.model.embeddings.custom_embeddings[item['attr_name']] = _embedding
+        # ======================== custom embedding ==========================
 
         self.allow_long_sentences = allow_long_sentences
         if not hasattr(self.tokenizer,'model_max_length'):
@@ -2999,13 +3067,13 @@ class TransformerWordEmbeddings(TokenEmbeddings):
             self.begin_offset = 0
         self.maximum_subtoken_length = maximum_subtoken_length
 
-
     def _add_embeddings_internal(self, sentences: List[Sentence]) -> List[Sentence]:
         """Add embeddings to all words in a list of sentences."""
         if not hasattr(self,'fine_tune'):
             self.fine_tune=False
         if hasattr(sentences, 'features'):
             if not self.fine_tune:
+                # print('>>> Get transformer features from saved ones')
                 if self.name in sentences.features:
                     return sentences
                 if len(sentences)>0:
@@ -3062,6 +3130,30 @@ class TransformerWordEmbeddings(TokenEmbeddings):
             token_text += self._remove_special_markup(piece)
         token_text = token_text.lower()
         return token_text
+
+    def _get_ids_for_custom_embedding(self, field, sentences, subtoken_lengths):  # by cwhsu
+        field_params = self.custom_embeddings_params[field]
+        padding_idx = field_params['params']['padding_idx']
+        # encode and batch
+        def _get_id(text):
+            return field_params['vocab'].index(text) + padding_idx + 1  # starting from padding_idx
+        max_len = max([sum(l) for l in subtoken_lengths])
+        all_ids = torch.ones(len(sentences), max_len+2, dtype=torch.long, device=flair.device) * padding_idx
+        assert len(sentences) == len(subtoken_lengths)
+        for six, (sentence, _subtoken_lengths) in enumerate(zip(sentences, subtoken_lengths)):
+            all_ids[six][0] = 0  # bos
+            tix = 1
+            assert len(sentence) == len(_subtoken_lengths)
+            for token, _subtoken_length in zip(sentence.tokens, _subtoken_lengths):
+                all_ids[six][tix: tix + _subtoken_length] = torch.tensor(
+                    [_get_id(token.get_tag(field).value)] * _subtoken_length.item(),
+                    dtype=torch.long,
+                    device=flair.device
+                )
+                tix += _subtoken_length
+            all_ids[six][tix] = 0 # eos
+
+        return all_ids
 
     def _add_embeddings_to_sentences(self, sentences: List[Sentence]):
         """Match subtokenization to Flair tokenization and extract embeddings from transformers for each token."""
@@ -3147,9 +3239,10 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                 token_subtoken_lengths[torch.where(token_subtoken_lengths>self.maximum_subtoken_length)] = self.maximum_subtoken_length
                 # pdb.set_trace()
                 subtokenized_sentence = new_subtokenized_sentence
-            
-            subtokenized_sentences_token_lengths.append(token_subtoken_lengths)
 
+            assert sum(token_subtoken_lengths).item() == len(subtokenized_sentence)  # by cwhsu
+
+            subtokenized_sentences_token_lengths.append(token_subtoken_lengths)
             subtoken_ids_sentence = self.tokenizer.convert_tokens_to_ids(subtokenized_sentence)
             nr_sentence_parts = 0
             if hasattr(self.tokenizer,'encode_plus'):
@@ -3213,15 +3306,73 @@ class TransformerWordEmbeddings(TokenEmbeddings):
             mask[s_id][:sequence_length] = torch.ones(sequence_length)
         # put encoded batch through transformer model to get all hidden states of all encoder layers
         inputs_embeds = None
-        
+
+        # import pdb; pdb.set_trace()
+        # === fix the bug of padding with zero instead of ones (by cwhsu) ===
+        for bix in range(input_ids.shape[0]):
+            for i in range(input_ids.shape[-1] - 1, -1, -1):
+                if input_ids[bix][i] == 0:
+                    input_ids[bix][i] = self.tokenizer.pad_token_id
+                else:
+                    assert input_ids[bix][i] == self.tokenizer.eos_token_id
+                    break
+        # ===================================================================
         if 'xlnet' in self.name:
             hidden_states = self.model(input_ids, attention_mask=mask, inputs_embeds = inputs_embeds)[-1]
             if self.sentence_feat:
                 assert 0, 'not implemented'
         else:
-            sequence_output, pooled_output, hidden_states = self.model(input_ids, attention_mask=mask, inputs_embeds = inputs_embeds)
+            # import pdb; pdb.set_trace()
+
+            # ==== use_relative_positions_for_nonlocals (by cwhsu) ====
+            model_params = {}
+            if hasattr(self, 'use_relative_positions_for_nonlocals') and self.use_relative_positions_for_nonlocals:
+                log.warn("> Relative positions are used.")
+                def get_relative_position_ids(input_ids, padding_idx=None):  # In RoBERTa / XLM-R, position_id starts from pad_token_id
+                    """Assume nonlocal sentences are separated by eos_token or sep_token (<EOS>, </s>)"""
+                    is_sent_sep_token = lambda id_: id_ in [self.tokenizer.eos_token_id, self.tokenizer.sep_token_id]
+                    position_ids = torch.ones(input_ids.shape, device='cuda', dtype=torch.long) * -1
+                    assert len(input_ids.shape) == 2
+                    for bix in range(input_ids.shape[0]):
+                        pid = padding_idx + 1 if padding_idx != None else 0
+                        for tix in range(input_ids.shape[1]):
+                            position_ids[bix][tix] = pid
+
+                            if tix == input_ids.shape[1] - 1:
+                                break
+                            if is_sent_sep_token(input_ids[bix][tix+1]):
+                                pid = padding_idx + 1 if padding_idx != None else 0
+                            elif padding_idx is not None and input_ids[bix][tix+1] == padding_idx:
+                                pid = padding_idx
+                            else:
+                                pid += 1
+                    assert torch.all(position_ids != -1)
+                    return position_ids
+                model_params = {'position_ids': get_relative_position_ids(input_ids, self.tokenizer.pad_token_id)}
+                # import pdb; pdb.set_trace()
+            # ===================================================================
+
+            # ========== custom embeddings ==========
+            if hasattr(self, 'custom_embeddings_params') and self.custom_embeddings_params is not None:
+                inputs_embeds = self.model.embeddings.word_embeddings(input_ids)
+                for field, field_params in self.custom_embeddings_params.items():
+                    _embedding = self.model.embeddings.custom_embeddings[field_params['attr_name']]
+                    _ids = self._get_ids_for_custom_embedding(field, sentences, subtokenized_sentences_token_lengths)
+                    # import pdb; pdb.set_trace()
+                    assert _ids.shape == input_ids.shape
+                    inputs_embeds += _embedding(_ids)
+                # print(input_ids.shape)
+                # import pdb; pdb.set_trace()
+                sequence_output, pooled_output, hidden_states = self.model(attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
+            # =========================================
+            else:
+                sequence_output, pooled_output, hidden_states = self.model(input_ids, attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
+
             if self.sentence_feat:
                 self.pooled_output = pooled_output
+
+                # for sent, _feat in zip(sentences, pooled_output):  # by cwhsu
+                #     sent.set_embedding(self.name, _feat)
             # hidden_states = self.model(input_ids, attention_mask=mask)[-1]
 
         # make the tuple a tensor; makes working with it easier.
@@ -3233,7 +3384,6 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         gradient_context = torch.enable_grad() if (self.fine_tune and self.training) else torch.no_grad()
 
         with gradient_context:
-
             # iterate over all subtokenized sentences
             for sentence_idx, (sentence, subtoken_lengths, nr_sentence_parts) in enumerate(zip(sentences, subtokenized_sentences_token_lengths, sentence_parts_lengths)):
 
@@ -3404,6 +3554,7 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                     extract_indices=extract_indices)
 
     def add_document_embeddings(self, sentences: List[Sentence], window_size=511, stride=1, batch_size = 32):
+        # import pdb; pdb.set_trace()  # by cwhsu
         # Sentences: a group of sentences that forms a document
 
         # first, subtokenize each sentence and find out into how many subtokens each token was divided

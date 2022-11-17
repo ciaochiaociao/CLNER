@@ -204,6 +204,13 @@ class ConfigParser:
 		tagger.lemma_map = lemma_map
 		tagger.postag_map = postag_map
 
+		# compatibility of relative position for previous versions, saved model without this attribute (by cwhsu)
+		tfm_embed = [e for e in tagger.embeddings.embeddings if 'TransformerWordEmbeddings' in str(type(e))][0]
+		_has_rel_pos_attr = hasattr(tfm_embed, 'use_relative_positions_for_nonlocals')
+		if _has_rel_pos_attr:
+			use_relative_positions_for_nonlocals = tfm_embed.use_relative_positions_for_nonlocals
+		# ----------------------
+
 		#
 		if pretrained:
 			if is_student and 'pretrained_model' in config:
@@ -226,6 +233,13 @@ class ConfigParser:
 				# break
 		if crf==False:
 			tagger.use_crf=crf
+
+		# compatibility of relative position for previous versions, saved model without this attribute (by cwhsu)
+		tfm_embed = [e for e in tagger.embeddings.embeddings if 'TransformerWordEmbeddings' in str(type(e))][0]
+		if _has_rel_pos_attr and not hasattr(tfm_embed, 'use_relative_positions_for_nonlocals'):
+			tfm_embed.use_relative_positions_for_nonlocals = use_relative_positions_for_nonlocals
+		# ----------------------
+
 		return tagger
 
 	def create_student(self,nocrf=False):

@@ -410,6 +410,7 @@ class ModelFinetuner(ModelDistiller):
 		use_warmup: bool = False,
 		gradient_accumulation_steps: int = 1,
 		lr_rate: int = 1,
+		lr_rate2: int = 1,
 		decay: float = 0.75,
 		decay_steps: int = 5000,
 		use_unlabeled_data: bool =False,
@@ -540,14 +541,18 @@ class ModelFinetuner(ModelDistiller):
 		loss_txt = init_output_file(base_path, "loss.tsv")
 		# weight_extractor = WeightExtractor(base_path)
 		# finetune_params = {name:param for name,param in self.model.named_parameters()}
-		finetune_params=[param for name,param in self.model.named_parameters() if 'embedding' in name or name=='linear.weight' or name=='linear.bias']
+		finetune_params=[param for name,param in self.model.named_parameters() if 'custom_embeddings' not in name and ('embedding' in name or name=='linear.weight' or name=='linear.bias')]
 		other_params=[param for name,param in self.model.named_parameters() if 'embedding' not in name and name !='linear.weight' and name !='linear.bias']
+		custom_embed_params=[param for name,param in self.model.named_parameters() if 'custom_embeddings' in name]
 		# all_params = [param for name,param in self.model.named_parameters()]
 		# pdb.set_trace()
 		# other_params = {name:param for name,param in self.model.named_parameters() if 'embeddings' not in name}
+		# import pdb; pdb.set_trace()
 		if len(self.update_params_group)>0:
 			optimizer: torch.optim.Optimizer = self.optimizer(
-				[{"params":other_params,"lr":learning_rate*lr_rate},
+				[
+				{"params":custom_embed_params,"lr":learning_rate*lr_rate2},
+				{"params":other_params,"lr":learning_rate*lr_rate},
 				{"params":self.update_params_group,"lr":learning_rate*lr_rate},
 				{"params":finetune_params}
 				],
@@ -555,7 +560,9 @@ class ModelFinetuner(ModelDistiller):
 			)
 		else:
 			optimizer: torch.optim.Optimizer = self.optimizer(
-				[{"params":other_params,"lr":learning_rate*lr_rate},
+				[
+				{"params":custom_embed_params,"lr":learning_rate*lr_rate2},
+				{"params":other_params,"lr":learning_rate*lr_rate},
 				{"params":finetune_params}
 				],
 				lr=learning_rate, **kwargs
@@ -979,7 +986,9 @@ class ModelFinetuner(ModelDistiller):
 										scaled_loss.backward()
 								else:
 									loss.backward()
-					except Exception:
+						# import pdb; pdb.set_trace()
+					# except Exception:
+					except PermissionError:  # for debugging by cwhsu
 						traceback.print_exc()
 						log.info(f"{[len(x) for x in student_input]}")
 						log.info(f"{student_input}")
@@ -1059,8 +1068,10 @@ class ModelFinetuner(ModelDistiller):
 				self.model.eval()
 
 				log_line(log)
+				
+				lrs = '|'.join([str(p["lr"]) for p in optimizer.param_groups])
 				log.info(
-					f"EPOCH {epoch + 1} done: loss {train_loss:.4f} - lr {learning_rate}"
+					f"EPOCH {epoch + 1} done: loss {train_loss:.4f} - lr {learning_rate} - lrs {lrs}"
 				)
 
 				if self.use_tensorboard:
@@ -2132,6 +2143,7 @@ class ModelFinetuner(ModelDistiller):
 			for subset in ('train', 'dev', 'test'):
 				loader=ColumnDataLoader(list(getattr(self.corpus, subset)),eval_mini_batch_size, use_bert=self.use_bert,tokenizer=self.bert_tokenizer, model = self.model, sentence_level_batch = self.sentence_level_batch, sort_data=sort_data)
 				loader.assign_tags(self.model.tag_type,self.model.tag_dictionary)
+				# import pdb; pdb.set_trace()
 				with torch.no_grad():
 					# pdb.set_trace()
 					self.gpu_friendly_assign_embedding([loader])

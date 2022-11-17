@@ -95,7 +95,7 @@ def pad_tensors(tensor_list):
 	return template, lens_
 
 
-
+# ohf = torch.tensor([0.321123])
 class SequenceTagger(flair.nn.Model):
 	def __init__(
 		self,
@@ -160,6 +160,8 @@ class SequenceTagger(flair.nn.Model):
 		multi_view_training: bool = False,
 		calculate_l2_loss: bool = False,
 		l2_loss_only: bool = False,
+		# ==== other tasks (by cwhsu) ===
+		with_tasks: bool = None,
 	):
 		"""
 		Initializes a SequenceTagger
@@ -249,6 +251,14 @@ class SequenceTagger(flair.nn.Model):
 		self.calculate_l2_loss = calculate_l2_loss
 		self.l2_loss_only = l2_loss_only
 
+		# multi-tasking (by cwhsu)
+		if with_tasks is None: with_tasks = {}
+		self.with_tasks = with_tasks
+		for task in with_tasks:
+			setattr(self, task + '_num_labels', len(self.with_tasks[task]['labels']))
+
+		# for task in with_tasks:
+		# 	setattr(self, 'with_' + task, True)
 		
 		# pdb.set_trace()
 
@@ -386,6 +396,29 @@ class SequenceTagger(flair.nn.Model):
 			self.linear = torch.nn.Linear(
 				self.embeddings.embedding_length, len(tag_dictionary)
 			)
+
+		# ============ for other tasks ============
+		
+		_need_sent_feat = False
+		for task, params in self.with_tasks.items():
+			# _decoder_params = list(params['decode'].items())
+			# assert len(_decoder_params) == 1
+			# _decoder_class, _params = _decoder_params[0]
+			# _decoder = _decoder_class(_params)
+
+			# get parameter from 
+			_decode = torch.nn.Linear(
+				self.embeddings.embedding_length, getattr(self, task + '_num_labels')
+			)
+			setattr(self, task + '_decode', _decoder)
+
+			# fixed loss function
+			if task == 'nkj':
+				_need_sent_feat = True
+				setattr(self, task + '_loss_function', nn.CrossEntropyLoss())
+
+		if _need_sent_feat:
+			self.embeddings.embeddings[0].sentence_feat = True
 
 		if self.use_crf:
 			if self.enhanced_crf:
@@ -535,6 +568,7 @@ class SequenceTagger(flair.nn.Model):
 			multi_view_training = False if "multi_view_training" not in state else state["multi_view_training"],
 			calculate_l2_loss = False if "calculate_l2_loss" not in state else state["calculate_l2_loss"],
 			l2_loss_only = False if "l2_loss_only" not in state else state["l2_loss_only"],
+			with_nkj = False if 'with_nkj' not in state else state["with_nkj"],
 		)
 		model.load_state_dict(state["state_dict"])
 		return model
@@ -701,9 +735,36 @@ class SequenceTagger(flair.nn.Model):
 	def forward_loss(
 		self, data_points: Union[List[Sentence], Sentence], sort=True
 	) -> torch.tensor:
-		features = self.forward(data_points)
-		return self._calculate_loss(features, data_points)
 
+		features = self.forward(data_points)
+		if len(self.with_tasks):
+			features, _other_feats = features
+		_loss = self._calculate_loss(features, data_points)
+		for task in self.with_tasks:
+			_loss += getattr(self, f"_calculate_{task}_loss")(_other_feats[task], data_points)
+		return _loss
+
+	# =============================== NKJ ===============================
+	def _calculate_nkj_loss(self, label_scores, sentences):
+		"""copied from text_classification_model.py by cwhsu"""
+		return self.nkj_loss_function(label_scores, self._labels_to_indices(self.with_tasks['nkj']['labels'], sentences))
+
+	def _labels_to_indices(self, labels, sentences: List[Sentence]):
+		"""copied from text_classification_model.py by cwhsu"""
+		indices = [
+            torch.LongTensor(
+                [
+                    labels.index(label.value)
+                    for label in sentence.labels
+                ]
+            )
+            for sentence in sentences
+        ]
+
+		vec = torch.cat(indices, 0).to(flair.device)
+
+		return vec
+	# =============================== NKJ ===============================
 
 	def simple_forward_distillation_loss(
 		self, data_points: Union[List[Sentence], Sentence], teacher_data_points: Union[List[Sentence], Sentence]=None, teacher=None, sort=True,
@@ -841,6 +902,8 @@ class SequenceTagger(flair.nn.Model):
 
 
 	def forward(self, sentences: List[Sentence], prediction_mode = False, return_sentence_tensor = False):
+		# global ohf
+
 		# self.zero_grad()
 		lengths: List[int] = [len(sentence.tokens) for sentence in sentences]
 
@@ -851,8 +914,11 @@ class SequenceTagger(flair.nn.Model):
 			self.embeddings.embed(sentences,embedding_mask=self.selection)
 		else:
 			self.embeddings.embed(sentences)
-	
-					
+			# print(sentences.features.keys())
+			# print(sentences.features['one-hot'])
+			# print(torch.all(sentences.features['one-hot'] == ohf))
+			# ohf = sentences.features['one-hot']
+
 		if hasattr(sentences,'features') and sentences.features!={}:
 			# #==============debug==============
 			# self.embedding_selector=True
@@ -948,6 +1014,7 @@ class SequenceTagger(flair.nn.Model):
 			  sentence_tensor[s_id][: len(sentence)] = torch.cat(
 				  [token.get_embedding().unsqueeze(0) for token in sentence], 0
 			  )
+			# import pdb; pdb.set_trace()
 			# sentence_tensor = sentence_tensor.to(flair.device)
 		# # TODO: this can only be removed once the implementations of word_dropout and locked_dropout have a batch_first mode
 
@@ -1025,6 +1092,15 @@ class SequenceTagger(flair.nn.Model):
 
 		features = self.linear(sentence_tensor)
 		self.mask=self.sequence_mask(torch.tensor(lengths),longest_token_sequence_in_batch).cuda().type_as(features)
+		
+		if len(self.with_tasks):
+			_other_feats = {}
+			for task in self.with_tasks:
+				if task == 'nkj':
+					_feats = getattr(self, task, '_decode')(self.embeddings.embeddings[0].pooled_output)
+				else:
+					raise ValueError(task)
+				_other_feats[task] = _feats
 
 		if return_sentence_tensor:
 			return sentence_tensor
@@ -1048,7 +1124,10 @@ class SequenceTagger(flair.nn.Model):
 				pdb.set_trace()
 			self.set_enhanced_transitions(sentences)
 
-		return features
+		if len(self.with_tasks):
+			return features, _other_feats
+		else:
+			return features
 	
 	def set_enhanced_transitions(self, sentences: List[Sentence]):
 		if self.use_transition_attention:
@@ -2694,6 +2773,7 @@ class FastSequenceTagger(SequenceTagger):
 				store_embeddings(batch, embeddings_storage_mode)
 				if embeddings_storage_mode == "none" and hasattr(batch,'features'):
 					del batch.features
+					# print('>>>> delete batch features')
 			if speed_test:
 				end_time = time.time()
 				print(data_loader.num_examples/(end_time-start_time))

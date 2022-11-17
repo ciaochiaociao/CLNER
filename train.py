@@ -20,7 +20,7 @@ from flair.utils.from_params import Params
 from flair.config_parser import ConfigParser
 import pdb
 import sys
-import os
+import os, shutil
 import logging
 from flair.custom_data_loader import ColumnDataLoader
 from flair.datasets import DataLoader
@@ -55,6 +55,8 @@ parser.add_argument('--test_speed', action='store_true', help='test the running 
 parser.add_argument('--predict_posterior', action='store_true', help='predict the posterior distribution of CRF model')
 parser.add_argument('--batch_size', default=-1, help='manually setting the mini batch size for testing')
 parser.add_argument('--keep_embedding', default=-1, help='mask out all embeddings except the index, for analysis')
+parser.add_argument('--force', action='store_true')
+
 
 def count_parameters(model):
 	import numpy as np
@@ -81,6 +83,8 @@ if args.test and args.zeroshot:
 
 # pdb.set_trace()
 config = ConfigParser(config,all=args.all,zero_shot=args.zeroshot,other_shot=args.other,predict=args.predict)
+os.makedirs(config.get_target_path, exist_ok=args.force)
+shutil.copy(args.config, config.get_target_path)
 # pdb.set_trace()
 
 from pprint import pprint
@@ -152,6 +156,7 @@ if args.test_speed:
 	
 
 elif args.test:
+	# import pdb; pdb.set_trace()
 	student.eval()
 	trainer.embeddings_storage_mode = 'cpu'
 	trainer.final_test(
