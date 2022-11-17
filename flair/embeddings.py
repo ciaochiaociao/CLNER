@@ -2934,6 +2934,7 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         sentence_feat: bool = False,
         use_relative_positions_for_nonlocals: bool = False,  # by cwhsu
         custom_embeddings_params = None,  # by cwhsu
+        tokenizer_params = None,
         **kwargs
     ):
         """
@@ -2958,9 +2959,12 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
         self.use_relative_positions_for_nonlocals = use_relative_positions_for_nonlocals  # by cwhsu
+        
+        if tokenizer_params is None:
+            tokenizer_params = {}
 
         # load tokenizer and transformer model
-        self.tokenizer = AutoTokenizer.from_pretrained(model, **kwargs)
+        self.tokenizer = AutoTokenizer.from_pretrained(model, **tokenizer_params)
         config = AutoConfig.from_pretrained(model, output_hidden_states=True, **kwargs)
         self.model = AutoModel.from_pretrained(model, config=config, **kwargs)
 
@@ -3361,8 +3365,8 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                     # import pdb; pdb.set_trace()
                     assert _ids.shape == input_ids.shape
                     inputs_embeds += _embedding(_ids)
-                # print(input_ids.shape)
-                # import pdb; pdb.set_trace()
+                print(input_ids.shape)
+                import pdb; pdb.set_trace()
                 sequence_output, pooled_output, hidden_states = self.model(attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
             # =========================================
             else:

@@ -910,11 +910,10 @@ class ColumnDataset(FlairDataset):
             position = 0
             # pdb.set_trace()
             while line:
-
                 if self.comment_symbol is not None and line.startswith(comment_symbol):
                     line = f.readline()
                     continue
-
+                
                 if line.isspace():
                     if len(sentence) > 0:
                         sentence.infer_space_after()
