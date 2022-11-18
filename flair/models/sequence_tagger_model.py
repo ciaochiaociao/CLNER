@@ -15,7 +15,7 @@ from flair.file_utils import cached_path
 
 from typing import List, Tuple, Union
 
-from flair.training_utils import Metric, Result, store_embeddings
+from flair.training_utils import Metric, Result, convert_labels_to_one_hot, store_embeddings
 from .biaffine_attention import BiaffineAttention
 
 from tqdm import tqdm
@@ -161,7 +161,7 @@ class SequenceTagger(flair.nn.Model):
 		calculate_l2_loss: bool = False,
 		l2_loss_only: bool = False,
 		# ==== other tasks (by cwhsu) ===
-		with_tasks: bool = None,
+		other_tasks: bool = None,
 	):
 		"""
 		Initializes a SequenceTagger
@@ -268,10 +268,10 @@ class SequenceTagger(flair.nn.Model):
 			  self.dropout = torch.nn.Dropout(dropout)
 
 			if word_dropout > 0.0:
-			  self.word_dropout = flair.nn.WordDropout(word_dropout)
+				self.word_dropout = flair.nn.WordDropout(word_dropout)
 
 			if locked_dropout > 0.0:
-			  self.locked_dropout = flair.nn.LockedDropout(locked_dropout)
+				self.locked_dropout = flair.nn.LockedDropout(locked_dropout)
 		else:
 			self.dropout1 = torch.nn.Dropout(p=dropout)
 			self.dropout2 = torch.nn.Dropout(p=dropout)
@@ -392,25 +392,26 @@ class SequenceTagger(flair.nn.Model):
 		# ============ for other tasks ============
 		# multi-tasking (by cwhsu)
 		_need_sent_feat = False
-		if with_tasks is None: with_tasks = {}
-		self.with_tasks = with_tasks
-		if self.with_tasks:
+		if other_tasks is None: other_tasks = {}
+		self.other_tasks = other_tasks
+		if self.other_tasks:
 			self.modules_for_other_tasks = torch.nn.ModuleDict()
-			for task, params in self.with_tasks.items():
+			for task, params in self.other_tasks.items():
 				self.modules_for_other_tasks[task] = torch.nn.ModuleDict()
-				if task == 'labeling':
-					self.num_labels = len(params['labels'])
+				self.modules_for_other_tasks[task]['decoder'] = torch.nn.Linear(
+					self.embeddings.embedding_length, len(params['labels'])
+				)
+				if task == 'labeling':  # multi-label
 					# get parameter from 
-					self.modules_for_other_tasks[task]['decoder'] = torch.nn.Linear(
-						self.embeddings.embedding_length, self.num_labels
-					)
 					_need_sent_feat = True
-					self.modules_for_other_tasks[task]['loss_function'] = torch.nn.CrossEntropyLoss()
-				elif task == 'classification':
+					loss_function = torch.nn.BCEWithLogitsLoss()
+				elif task == 'classification':  # single label
 					_need_sent_feat = True
-					...
+					loss_function = torch.nn.CrossEntropyLoss()
 				elif task == 'tagging':
+					loss_function = torch.nn.CrossEntropyLoss()
 					...
+				self.modules_for_other_tasks[task]['loss_function'] = loss_function
 
 		if _need_sent_feat:
 			self.embeddings.embeddings[0].sentence_feat = True
@@ -502,6 +503,8 @@ class SequenceTagger(flair.nn.Model):
 			"multi_view_training": self.multi_view_training,
 			"calculate_l2_loss": self.calculate_l2_loss,
 			"l2_loss_only": self.l2_loss_only,
+			# cwhsu
+			"other_tasks": self.other_tasks,
 		}
 		return model_state
 
@@ -564,7 +567,8 @@ class SequenceTagger(flair.nn.Model):
 			multi_view_training = False if "multi_view_training" not in state else state["multi_view_training"],
 			calculate_l2_loss = False if "calculate_l2_loss" not in state else state["calculate_l2_loss"],
 			l2_loss_only = False if "l2_loss_only" not in state else state["l2_loss_only"],
-			with_tasks = False if 'with_tasks' not in state else state["with_tasks"],
+			# cwhsu
+			# other_tasks = False if 'other_tasks' not in state else state["other_tasks"],
 		)
 		model.load_state_dict(state["state_dict"])
 		return model
@@ -1063,9 +1067,9 @@ class SequenceTagger(flair.nn.Model):
 		features = self.linear(sentence_tensor)
 		self.mask=self.sequence_mask(torch.tensor(lengths),longest_token_sequence_in_batch).cuda().type_as(features)
 		
-		if len(self.with_tasks):
+		if len(self.other_tasks):
 			_other_feats = {}
-			for task in self.with_tasks:
+			for task in self.other_tasks:
 				if task == 'labeling':
 					_feats = self.modules_for_other_tasks[task]['decoder'](self.embeddings.embeddings[0].pooled_output)
 				else:
@@ -1094,7 +1098,7 @@ class SequenceTagger(flair.nn.Model):
 				pdb.set_trace()
 			self.set_enhanced_transitions(sentences)
 
-		if len(self.with_tasks):
+		if len(self.other_tasks):
 			return features, _other_feats
 		else:
 			return features
@@ -1940,6 +1944,8 @@ class FastSequenceTagger(SequenceTagger):
 			multi_view_training = False if "multi_view_training" not in state else state["multi_view_training"],
 			calculate_l2_loss = False if "calculate_l2_loss" not in state else state["calculate_l2_loss"],
 			l2_loss_only = False if "l2_loss_only" not in state else state["l2_loss_only"],
+			# other tasks by cwhsu
+			other_tasks = None if "other_tasks" not in state else state["other_tasks"],
 		)
 		model.load_state_dict(state["state_dict"])
 		return model
@@ -1952,13 +1958,22 @@ class FastSequenceTagger(SequenceTagger):
 		# longest_token_sequence_in_batch: int = max(lengths)
 
 		# ========================== cwhsu ==========================
-		if len(self.with_tasks):
+		if len(self.other_tasks):
 			features, _other_feats = features
+		# target task
 		loss = self._calculate_loss(features, data_points, self.mask)
-		for task in self.with_tasks:
+
+		# other tasks
+		for task in self.other_tasks:
 			loss_fct = self.modules_for_other_tasks[task]['loss_function']
-			labels = self._labels_to_indices(data_points, self.with_tasks[task]['labels'])
-			loss += loss_fct(_other_feats[task], labels)
+			labels = self.other_tasks[task]['labels']
+			if task == 'labeling':
+				_refs = self._labels_to_one_hot(data_points, labels)
+			elif task == 'sent_tagging':
+				_refs = self._labels_to_indices(data_points, labels, task)
+			else:
+				raise NotImplementedError(task)
+			loss += loss_fct(_other_feats[task], _refs)
 		# ========================== cwhsu ==========================
 
 		# max_len = features.shape[1]
@@ -1979,18 +1994,25 @@ class FastSequenceTagger(SequenceTagger):
 		return loss	
 
 	# =============================== labeling ===============================
+	"""copied and modified from text_classification_model.py by cwhsu"""
 
-	def _labels_to_indices(self, sentences: List[Sentence], labels):
-		"""copied from text_classification_model.py by cwhsu"""
+	def _labels_to_one_hot(self, sentences, labels):
+		pred_labels = [[l.value for l in sentence.labels if l.type == 'label'] for sentence in sentences]
+		one_hot = [[1 if l in pred_labels else 0 for l in labels] for pred_labels in pred_labels]
+		one_hot = [torch.FloatTensor(l).unsqueeze(0) for l in one_hot]
+		one_hot = torch.cat(one_hot, 0).to(flair.device)
+		return one_hot
+
+	def _labels_to_indices(self, sentences: List[Sentence], labels, task):
 		indices = [
-            torch.LongTensor(
-                [
-                    labels.index(label.value)
-                    for label in sentence.labels
-                ]
-            )
-            for sentence in sentences
-        ]
+			torch.LongTensor(
+				[
+					labels.index(label.value)
+					for label in sentence.labels if label.type == 'tag' and label.name == task
+				]
+			)
+			for sentence in sentences
+		]
 
 		vec = torch.cat(indices, 0).to(flair.device)
 
@@ -2693,6 +2715,8 @@ class FastSequenceTagger(SequenceTagger):
 				with torch.no_grad():
 					# pdb.set_trace()
 					features = self.forward(batch,prediction_mode=prediction_mode)
+					if len(self.other_tasks):
+						features, other_feats = features
 					if not speed_test:
 						mask=self.mask
 						loss = self._calculate_loss(features, batch, mask)
