@@ -394,25 +394,34 @@ class SequenceTagger(flair.nn.Model):
 		_need_sent_feat = False
 		if other_tasks is None: other_tasks = {}
 		self.other_tasks = other_tasks
+
 		if self.other_tasks:
 			self.modules_for_other_tasks = torch.nn.ModuleDict()
-			for task, params in self.other_tasks.items():
+			_use_ce = False
+			for task_params in self.other_tasks:
+				if 'loss_weight' not in task_params:
+					task_params['loss_weight'] = 1.0
+
+				task = task_params['name']
 				self.modules_for_other_tasks[task] = torch.nn.ModuleDict()
 				self.modules_for_other_tasks[task]['decoder'] = torch.nn.Linear(
-					self.embeddings.embedding_length, len(params['labels'])
+					self.embeddings.embedding_length, len(task_params['labels'])
 				)
 				if task == 'labeling':  # multi-label
 					# get parameter from 
 					_need_sent_feat = True
-					loss_function = torch.nn.BCEWithLogitsLoss()
+					_use_bce = True
 				elif task == 'classification':  # single label
 					_need_sent_feat = True
-					loss_function = torch.nn.CrossEntropyLoss()
+					_use_ce = True
 				elif task == 'tagging':
-					loss_function = torch.nn.CrossEntropyLoss()
+					_use_ce = True
 					...
-				self.modules_for_other_tasks[task]['loss_function'] = loss_function
 
+			if _use_bce:
+				self.bce_loss_function = torch.nn.BCEWithLogitsLoss()
+			if _use_ce:
+				self.ce_loss_function = torch.nn.CrossEntropyLoss()
 		if _need_sent_feat:
 			self.embeddings.embeddings[0].sentence_feat = True
 
@@ -1069,7 +1078,8 @@ class SequenceTagger(flair.nn.Model):
 		
 		if len(self.other_tasks):
 			_other_feats = {}
-			for task in self.other_tasks:
+			for task_params in self.other_tasks:
+				task = task_params['name']
 				if task == 'labeling':
 					_feats = self.modules_for_other_tasks[task]['decoder'](self.embeddings.embeddings[0].pooled_output)
 				else:
@@ -1957,24 +1967,17 @@ class FastSequenceTagger(SequenceTagger):
 		# lengths = [len(sentence.tokens) for sentence in data_points]
 		# longest_token_sequence_in_batch: int = max(lengths)
 
-		# ========================== cwhsu ==========================
+		# ==== by cwhsu ====
 		if len(self.other_tasks):
 			features, _other_feats = features
+
 		# target task
 		loss = self._calculate_loss(features, data_points, self.mask)
 
-		# other tasks
-		for task in self.other_tasks:
-			loss_fct = self.modules_for_other_tasks[task]['loss_function']
-			labels = self.other_tasks[task]['labels']
-			if task == 'labeling':
-				_refs = self._labels_to_one_hot(data_points, labels)
-			elif task == 'sent_tagging':
-				_refs = self._labels_to_indices(data_points, labels, task)
-			else:
-				raise NotImplementedError(task)
-			loss += loss_fct(_other_feats[task], _refs)
-		# ========================== cwhsu ==========================
+		# === other tasks by cwhsu ===
+		for task_params in self.other_tasks:
+			loss += task_params['loss_weight'] * self._calculate_task_loss(_other_feats, data_points, task_params)
+
 
 		# max_len = features.shape[1]
 		# mask=self.sequence_mask(torch.tensor(lengths), max_len).cuda().type_as(features)
@@ -1993,22 +1996,58 @@ class FastSequenceTagger(SequenceTagger):
 			#   # loss = interpolation * distillation_loss + (1-interpolation) * target_loss
 		return loss	
 
-	# =============================== labeling ===============================
-	"""copied and modified from text_classification_model.py by cwhsu"""
 
-	def _labels_to_one_hot(self, sentences, labels):
-		pred_labels = [[l.value for l in sentence.labels if l.type == 'label'] for sentence in sentences]
-		one_hot = [[1 if l in pred_labels else 0 for l in labels] for pred_labels in pred_labels]
+
+	# =============================== other tasks begins ===============================================================
+	# copied and modified from text_classification_model.py by cwhsu
+	def _get_token_attributes(self, sentences, attr_fct, filter_fct):
+			return [
+				[
+					attr_fct(token)
+					for token in sentence.tokens if filter_fct(token)
+				]
+				for sentence in sentences
+			]
+	def _get_labels(self, sentences, task_params):
+		if task_params['level'] == 'sent':
+			return [[l.value for l in sentence.labels if l.type == 'label'] for sentence in sentences]
+		elif task_params['level'] == 'token':
+			return self._get_token_attributes(sentences, 
+				lambda token: [l.value for l in token.labels],
+				lambda token: token.type == 'label'
+				)
+	
+	def _get_tags(self, sentences, task_params):
+		if task_params['level'] == 'sent':
+			return [
+				[label for label in sentence.labels if label.type == 'tag' and label.name == task_params['name']]
+				for sentence in sentences
+			]
+		elif task_params['level'] == 'token':
+			...
+
+	def _labels_to_one_hot(self, sentences: List[Sentence], task_params):
+		level = task_params['level']
+		if level == 'sent':
+			one_hot = [[1 if l in pred_labels else 0 for l in task_params['labels']] for pred_labels in self._get_labels(sentences, task_params)]
+		elif level == 'token':
+			one_hot = [[[(1 if l in pred_labels_per_tok else 0)
+							for l in task_params['labels']] 
+						for pred_labels_per_tok in pred_labels_per_sent] 
+					for pred_labels_per_sent in self._get_labels(sentences, task_params)]
+		else:
+			raise ValueError(level)
 		one_hot = [torch.FloatTensor(l).unsqueeze(0) for l in one_hot]
 		one_hot = torch.cat(one_hot, 0).to(flair.device)
+		import pdb; pdb.set_trace()
 		return one_hot
 
-	def _labels_to_indices(self, sentences: List[Sentence], labels, task):
+	def _labels_to_indices(self, sentences: List[Sentence], task_params):
 		indices = [
 			torch.LongTensor(
 				[
-					labels.index(label.value)
-					for label in sentence.labels if label.type == 'tag' and label.name == task
+					task_params['labels'].index(label.value)
+					for label in self._get_tags(sentence, task_params)
 				]
 			)
 			for sentence in sentences
@@ -2017,7 +2056,83 @@ class FastSequenceTagger(SequenceTagger):
 		vec = torch.cat(indices, 0).to(flair.device)
 
 		return vec
-	# =============================== labeling ===============================
+
+	def _obtain_task_labels(
+        self, scores: List[List[float]], task_params, predict_prob: bool = False
+    ) -> List[List[Label]]:
+		"""
+		Predicts the labels of sentences.
+		:param scores: the prediction scores from the model
+		:return: list of predicted labels
+		"""
+
+		if task_params['name'] == 'labeling':
+			return [self._get_multi_label(s) for s in scores]
+
+		elif predict_prob:
+			return [self._predict_label_prob(s) for s in scores]
+
+		return [self._get_single_label(s) for s in scores]
+
+	def _get_multi_label(self, label_scores) -> List[Label]:
+		labels = []
+
+		sigmoid = torch.nn.Sigmoid()
+
+		results = list(map(lambda x: sigmoid(x), label_scores))
+		for idx, conf in enumerate(results):
+			if conf > self.multi_label_threshold:
+				label = self.label_dictionary.get_item_for_index(idx)
+				labels.append(Label(label, conf.item()))
+
+		return labels
+
+	def _get_single_label(self, label_scores) -> List[Label]:
+		softmax = torch.nn.functional.softmax(label_scores, dim=0)
+		conf, idx = torch.max(softmax, 0)
+		label = self.label_dictionary.get_item_for_index(idx.item())
+
+		return [Label(label, conf.item())]
+
+	def _predict_label_prob(self, label_scores) -> List[Label]:
+		softmax = torch.nn.functional.softmax(label_scores, dim=0)
+		label_probs = []
+		for idx, conf in enumerate(softmax):
+			label = self.label_dictionary.get_item_for_index(idx)
+			label_probs.append(Label(label, conf.item()))
+		return label_probs
+
+	def _calculate_task_loss(self, all_other_feats, sentences: List[Sentence], task_params):
+		task = task_params['name']
+		if task == 'labeling':
+			task_loss = self._calculate_multi_label_loss(all_other_feats[task], sentences, task_params)
+			
+		elif task == 'sent_tagging':
+			task_loss = self._calculate_single_label_loss(all_other_feats[task], sentences, task_params)
+		else:
+			raise NotImplementedError(task)
+		return task_loss
+
+	def _calculate_multi_label_loss(
+		self, label_scores: torch.Tensor, sentences: List[Sentence], task_params
+	) -> float:
+		if task_params['level'] == 'sent':
+			return self.bce_loss_function(label_scores, self._labels_to_one_hot(sentences, task_params))
+		elif task_params['level'] == 'token':
+			indices = self._get_token_attributes(sentences,
+				lambda token: token.id - 1,
+				lambda token: token.type == task_params['labeling']
+			)
+			import pdb; pdb.set_trace()
+			label_scores = torch.masked_select(label_scores, indices)
+			return self.bce_loss_function(label_scores, self._labels_to_one_hot(sentences, task_params))
+		else: raise ValueError
+	def _calculate_single_label_loss(
+		self, label_scores, sentences: List[Sentence], task_params
+	) -> float:
+		return self.ce_loss_function(label_scores, self._labels_to_indices(sentences, task_params))
+
+	# =============================== other tasks ends ===============================
 
 	def multi_view_loss(self, data_points: Union[List[Sentence], Sentence], features, tag_list, sort=True):
 		# if self.multi_view_training:
@@ -2123,6 +2238,8 @@ class FastSequenceTagger(SequenceTagger):
 			sentences.orig_sentences = orig_sentences
 
 		orig_features = self.forward(orig_sentences)
+		if len(self.other_tasks):
+			orig_features, _other_feats = orig_features
 
 		if self.calculate_l2_loss:
 			masked_representations = masked_representations.detach()
@@ -2211,7 +2328,10 @@ class FastSequenceTagger(SequenceTagger):
 		interpolation=0.5, train_with_professor=False, professor_interpolation=0.5, language_attention_warmup = False, calc_teachers_target_loss = False,
 		language_weight = None, biaffine = None, language_vector = None,
 	) -> torch.tensor:
+	
 		features = self.forward(data_points)
+		if len(self.other_tasks):
+			features, _other_feats = features
 		lengths = [len(sentence.tokens) for sentence in data_points]
 		batch_size = len(lengths)
 		max_len = features.shape[1]
@@ -2412,6 +2532,8 @@ class FastSequenceTagger(SequenceTagger):
 			if teacher is not None:
 				with torch.no_grad():
 					teacher_features = teacher.forward(teacher_data_points)
+					if len(self.other_tasks):
+						teacher_features, _other_feats = teacher_features
 			else:
 				if train_with_professor and not self.biaf_attention:
 					teacher_features = torch.stack([sentence.get_professor_teacher_prediction(professor_interpolation=professor_interpolation) for sentence in data_points],0)
@@ -2526,6 +2648,7 @@ class FastSequenceTagger(SequenceTagger):
 		self, features: torch.tensor, sentences: List[Sentence], mask: torch.tensor,
 	) -> float:
 
+			
 		lengths: List[int] = [len(sentence.tokens) for sentence in sentences]
 
 		tag_list: List = []
@@ -2635,6 +2758,7 @@ class FastSequenceTagger(SequenceTagger):
 			else:
 				entro_loss = (entropy * unlabel_id).sum()/self.mask.sum()
 			score += self.entropy_loss_rate * entro_loss
+
 		return score
 
 	def entropy_loss(self,distribution):
@@ -2715,11 +2839,19 @@ class FastSequenceTagger(SequenceTagger):
 				with torch.no_grad():
 					# pdb.set_trace()
 					features = self.forward(batch,prediction_mode=prediction_mode)
+					
+					# ==== by cwhsu ====
 					if len(self.other_tasks):
-						features, other_feats = features
+						features, _other_feats = features
+
 					if not speed_test:
 						mask=self.mask
 						loss = self._calculate_loss(features, batch, mask)
+						
+					# === other tasks by cwhsu ===
+					for task_params in self.other_tasks:
+						loss += task_params['loss_weight'] * self._calculate_task_loss(_other_feats, batch, task_params)
+
 					tags, _ = self._obtain_labels(features, batch)
 				if not speed_test:
 					eval_loss += loss
