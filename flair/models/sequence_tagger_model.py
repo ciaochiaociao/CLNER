@@ -407,14 +407,14 @@ class SequenceTagger(flair.nn.Model):
 				self.modules_for_other_tasks[task]['decoder'] = torch.nn.Linear(
 					self.embeddings.embedding_length, len(task_params['labels'])
 				)
-				if task == 'labeling':  # multi-label
+				if task.startswith('labeling'):  # multi-label
 					# get parameter from 
 					_need_sent_feat = True
 					_use_bce = True
-				elif task == 'classification':  # single label
+				elif task.startswith('classification'):  # single label
 					_need_sent_feat = True
 					_use_ce = True
-				elif task == 'tagging':
+				elif task.startswith('tagging'):
 					_use_ce = True
 					...
 
@@ -1080,8 +1080,15 @@ class SequenceTagger(flair.nn.Model):
 			_other_feats = {}
 			for task_params in self.other_tasks:
 				task = task_params['name']
-				if task == 'labeling':
-					_feats = self.modules_for_other_tasks[task]['decoder'](self.embeddings.embeddings[0].pooled_output)
+				level = task_params['level']
+				if task.startswith('labeling'):
+					if level == 'sent':
+						_feats = self.embeddings.embeddings[0].pooled_output
+					elif level == 'token':
+						_feats = sentence_tensor
+					else:
+						raise ValueError(level)
+					_feats = self.modules_for_other_tasks[task]['decoder'](_feats)
 				else:
 					raise ValueError(task)
 				_other_feats[task] = _feats
@@ -2000,27 +2007,30 @@ class FastSequenceTagger(SequenceTagger):
 
 	# =============================== other tasks begins ===============================================================
 	# copied and modified from text_classification_model.py by cwhsu
-	def _get_token_attributes(self, sentences, attr_fct, filter_fct):
-			return [
-				[
-					attr_fct(token)
-					for token in sentence.tokens if filter_fct(token)
-				]
-				for sentence in sentences
+	def _get_token_attributes(self, sentences, attr_fct, filter_fct=None):
+		if filter_fct is None:
+			filter_fct = lambda t: True
+		return [
+			[
+				attr_fct(token)
+				for token in sentence.tokens if filter_fct(token)
 			]
+			for sentence in sentences
+		]
 	def _get_labels(self, sentences, task_params):
+		"""only get labels, not tags"""
 		if task_params['level'] == 'sent':
-			return [[l.value for l in sentence.labels if l.type == 'label'] for sentence in sentences]
+			return [[l.value for l in sentence.labels] for sentence in sentences]
 		elif task_params['level'] == 'token':
 			return self._get_token_attributes(sentences, 
-				lambda token: [l.value for l in token.labels],
-				lambda token: token.type == 'label'
+					lambda token: [l.value for l in token.labels],
+					lambda token: token.scope == task_params['scope']
 				)
 	
 	def _get_tags(self, sentences, task_params):
 		if task_params['level'] == 'sent':
 			return [
-				[label for label in sentence.labels if label.type == 'tag' and label.name == task_params['name']]
+				sentence.tags[task_params['name']]
 				for sentence in sentences
 			]
 		elif task_params['level'] == 'token':
@@ -2039,7 +2049,6 @@ class FastSequenceTagger(SequenceTagger):
 			raise ValueError(level)
 		one_hot = [torch.FloatTensor(l).unsqueeze(0) for l in one_hot]
 		one_hot = torch.cat(one_hot, 0).to(flair.device)
-		import pdb; pdb.set_trace()
 		return one_hot
 
 	def _labels_to_indices(self, sentences: List[Sentence], task_params):
@@ -2066,7 +2075,7 @@ class FastSequenceTagger(SequenceTagger):
 		:return: list of predicted labels
 		"""
 
-		if task_params['name'] == 'labeling':
+		if task_params['name'].startswith('labeling'):
 			return [self._get_multi_label(s) for s in scores]
 
 		elif predict_prob:
@@ -2104,10 +2113,9 @@ class FastSequenceTagger(SequenceTagger):
 
 	def _calculate_task_loss(self, all_other_feats, sentences: List[Sentence], task_params):
 		task = task_params['name']
-		if task == 'labeling':
+		if task.startswith('labeling'):
 			task_loss = self._calculate_multi_label_loss(all_other_feats[task], sentences, task_params)
-			
-		elif task == 'sent_tagging':
+		elif task.startswith('tagging'):
 			task_loss = self._calculate_single_label_loss(all_other_feats[task], sentences, task_params)
 		else:
 			raise NotImplementedError(task)
@@ -2117,16 +2125,24 @@ class FastSequenceTagger(SequenceTagger):
 		self, label_scores: torch.Tensor, sentences: List[Sentence], task_params
 	) -> float:
 		if task_params['level'] == 'sent':
+			# import pdb; pdb.set_trace()
 			return self.bce_loss_function(label_scores, self._labels_to_one_hot(sentences, task_params))
 		elif task_params['level'] == 'token':
 			indices = self._get_token_attributes(sentences,
-				lambda token: token.id - 1,
-				lambda token: token.type == task_params['labeling']
+				lambda token: token.idx - 1,
+				lambda token: task_params['scope'] == token.scope
 			)
-			import pdb; pdb.set_trace()
-			label_scores = torch.masked_select(label_scores, indices)
-			return self.bce_loss_function(label_scores, self._labels_to_one_hot(sentences, task_params))
-		else: raise ValueError
+			# import pdb; pdb.set_trace()
+
+			_loss = 0
+			for _scores, _inds, sentence in zip(label_scores, indices, sentences):
+				if len(_inds):
+					_inds = _scores[_inds]
+					_one_hot = self._labels_to_one_hot([sentence], task_params)[0]
+					_loss += self.bce_loss_function(_inds, _one_hot)
+			return _loss
+		else:
+			raise ValueError
 	def _calculate_single_label_loss(
 		self, label_scores, sentences: List[Sentence], task_params
 	) -> float:
