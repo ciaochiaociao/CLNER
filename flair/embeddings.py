@@ -3375,6 +3375,7 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                 sequence_output, pooled_output, hidden_states = self.model(attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
             # =========================================
             else:
+                import pdb; pdb.set_trace()
                 sequence_output, pooled_output, hidden_states = self.model(input_ids, attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
 
             if self.sentence_feat:

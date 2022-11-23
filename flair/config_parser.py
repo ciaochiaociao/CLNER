@@ -100,6 +100,7 @@ class ConfigParser:
 				# pdb.set_trace()
 		self.corpus_list: list[str] = self.config[self.target]['Corpus'].split(':')
 		# keep the consistency of tag dictionary
+		pdb.set_trace()
 		if 'tag_dictionary' in self.config[self.target] and Path(self.config[self.target]['tag_dictionary']).exists():
 			self.tag_dictionary=Dictionary.load_from_file(self.config[self.target]['tag_dictionary'])
 			# pdb.set_trace()
@@ -213,7 +214,7 @@ class ConfigParser:
 		if _has_rel_pos_attr:
 			use_relative_positions_for_nonlocals = tfm_embed.use_relative_positions_for_nonlocals
 		# ----------------------
-
+		import pdb; pdb.set_trace()
 		#
 		if pretrained:
 			if is_student and 'pretrained_model' in config:

@@ -50,7 +50,6 @@ class ColumnDataLoader:
 				self.tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased')
 			else:
 				self.tokenizer = tokenizer
-
 		self.data = self.chunk_batches(data,sort_data=sort_data)
 
 		# pdb.set_trace()

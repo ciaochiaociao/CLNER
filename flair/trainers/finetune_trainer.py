@@ -2291,12 +2291,12 @@ class ModelFinetuner(ModelDistiller):
 		return 0
 
 	
-	def gpu_friendly_assign_embedding(self, *args, **kwargs):
-		# a hack to preserve the nonlocal tokens for the use of evaluation for other tasks by cwhsu
+	# def gpu_friendly_assign_embedding(self, *args, **kwargs):
+	# 	# a hack to preserve the nonlocal tokens for the use of evaluation for other tasks by cwhsu
 
-		self.model.remove_x = False
-		super().gpu_friendly_assign_embedding( *args, **kwargs)
-		self.model.remove_x = True
+	# 	self.model.remove_x = False
+	# 	super().gpu_friendly_assign_embedding( *args, **kwargs)
+	# 	self.model.remove_x = True
 		
 
 	def find_learning_rate(

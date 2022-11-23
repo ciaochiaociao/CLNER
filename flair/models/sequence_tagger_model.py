@@ -581,8 +581,6 @@ class SequenceTagger(flair.nn.Model):
 			multi_view_training = False if "multi_view_training" not in state else state["multi_view_training"],
 			calculate_l2_loss = False if "calculate_l2_loss" not in state else state["calculate_l2_loss"],
 			l2_loss_only = False if "l2_loss_only" not in state else state["l2_loss_only"],
-			# cwhsu
-			# other_tasks = False if 'other_tasks' not in state else state["other_tasks"],
 		)
 		model.load_state_dict(state["state_dict"])
 		return model
@@ -1986,6 +1984,7 @@ class FastSequenceTagger(SequenceTagger):
 			features, _other_feats = features
 
 		# target task
+		# import pdb; pdb.set_trace()
 		loss = self.loss_weight * self._calculate_loss(features, data_points, self.mask)
 
 		# === other tasks by cwhsu ===
