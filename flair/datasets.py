@@ -864,7 +864,8 @@ class ColumnDataset(FlairDataset):
         in_memory: bool = True,
 
         # cwhsu
-        comment_line_format: Dict[int, dict] = None,
+        comment_line_format: Dict[str, dict] = None,
+        scope_token_map: Dict[str, str] = None,
     ):
         """
         Instantiates a column dataset (typically used for sequence labeling or word-level prediction).
@@ -886,6 +887,14 @@ class ColumnDataset(FlairDataset):
         if comment_line_format is None:
             comment_line_format = {}
         self.comment_line_format = comment_line_format
+        if scope_token_map is None:
+            self.scope_token_map = {
+                'local_eos': None,
+                'nonlocal_bos': None,
+                'nonlocal_eos': None,
+            }
+        else:
+            self.scope_token_map = scope_token_map
 
         # store either Sentence objects in memory, or only file offsets
         self.in_memory = in_memory
@@ -921,15 +930,15 @@ class ColumnDataset(FlairDataset):
 
             line = f.readline()
             position = 0
-            print_once = True
             # pdb.set_trace()
 
             # for the first token (cwhsu)
             _add_labels_to_token = False
-            scope = None
 
             # start looping the file
             while line:
+                # print(line)
+                # import pdb; pdb.set_trace()
                 if self.comment_symbol is not None and line.startswith(comment_symbol):
 
                     # ==== Add sentence-wise features and labels by cwhsu ====
@@ -940,7 +949,7 @@ class ColumnDataset(FlairDataset):
                     #     level: sent  # token
                     #     scope: local  # nonlocal
                     # note - flair only supports sentence labeling, token sequence tagging, 
-
+                    # import pdb; pdb.set_trace()
                     _only_once = 0
                     for custom_comment_symbol, field in self.comment_line_format.items():
 
@@ -948,10 +957,10 @@ class ColumnDataset(FlairDataset):
                         if line.strip().split(' ')[0] == custom_comment_symbol:
                             _only_once += 1
                             # discriminate the scope of the token in the example (local, nonlocal_bos, nonlocal_token)
-                            if 'scope' in field:
-                                scope = field['scope']
-                            else:
-                                scope = None
+                            # if 'scope' in field:
+                            #     scope = field['scope']
+                            # else:
+                            #     scope = None
 
                             _comment_fields = re.split("\s+", line[len(custom_comment_symbol):].strip())
 
@@ -1009,24 +1018,7 @@ class ColumnDataset(FlairDataset):
                             self.indices.append(position)
                             position = f.tell()
                         self.total_sentence_count += 1
-                    
-                    # print sample (cwhsu)
-                    # import pdb; pdb.set_trace()
-                    if print_once:
-                        print('sent labels:')
-                        print([label for label in sentence.labels])
-                        for token in sentence.tokens[:30] + sentence.tokens[-20:]:
-                            print(token, end=' ')
-                            for name in self.column_name_map.values():
-                                print(token.get_tag(name).value, end=f' ({name}) ')
-                            print('\t | labels:', [label for label in token.labels], end=' ')
-                            if token.scope is not None:
-                                print('\tscope:', token.scope, end='')
-                            print()
-                        print()
-                        print_once = False
-                    # input()
-                    
+
                     sentence: Sentence = Sentence()
                     _add_labels_to_token = False  # for labeling tokens by cwhsu
                     sentence.tags = {}  # by cwhsu for sentence to do both "multiple and single-choice problem"
@@ -1035,9 +1027,9 @@ class ColumnDataset(FlairDataset):
                     token = Token(fields[self.text_column])
 
                     # discriminate tokens in different scope of the sentence for labeling by cwhsu
-                    assert not hasattr(token, 'scope')
-                    token.scope = scope
-                    scope = None
+                    # assert not hasattr(token, 'scope')
+                    # token.scope = scope
+                    # scope = None
 
                     # for labeling tokens by cwhsu
                     if _add_labels_to_token:
@@ -1057,6 +1049,7 @@ class ColumnDataset(FlairDataset):
 
                 line = f.readline()
 
+
         if len(sentence.tokens) > 0:
             sentence.infer_space_after()
             if self.in_memory:
@@ -1068,6 +1061,46 @@ class ColumnDataset(FlairDataset):
             else:
                 self.indices.append(position)
             self.total_sentence_count += 1
+
+        print_once = True
+        # set local and nonlocal scope by cwhsu
+        for sentence in self.sentences:
+            
+            _out_of_local = False
+            for token in sentence:
+                if not _out_of_local:
+                    if token.text == scope_token_map['local_eos']:
+                        _scope = 'local_eos'
+                        _out_of_local = True
+                    else:
+                        _scope = 'local_token'
+                else:
+                    assert token.tags['ner'].value == 'S-X'
+                    if token.text == scope_token_map['nonlocal_bos']:
+                        _scope = 'nonlocal_bos'
+                    elif token.text == scope_token_map['nonlocal_eos']:
+                        _scope = 'nonlocal_eos'
+                    else:
+                        _scope = 'nonlocal_token'
+                token.scope = _scope
+                    
+            # print sample (cwhsu)
+            # import pdb; pdb.set_trace()
+            if print_once:
+                print('sent labels:')
+                print([label for label in sentence.labels])
+                for token in sentence.tokens[:30] + sentence.tokens[-20:]:
+                    print(token, end=' ')
+                    for name in self.column_name_map.values():
+                        print(token.get_tag(name).value, end=f' ({name}) ')
+                    print('\t | labels:', [label for label in token.labels], end=' ')
+                    if token.scope is not None:
+                        print('\tscope:', token.scope, end='')
+                    print()
+                print()
+                print_once = False
+            # input()
+
     @property
     def reset_sentence_count(self):
         self.total_sentence_count = len(self.sentences)

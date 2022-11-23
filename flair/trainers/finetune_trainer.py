@@ -1111,11 +1111,23 @@ class ModelFinetuner(ModelDistiller):
 									loader,
 									embeddings_storage_mode=embeddings_storage_mode,
 								)
+								
+								# for other tasks by cwhsu
+								if self.model.other_tasks:
+									current_result, _other_results = current_result
+									
+									for i, _other_result in enumerate(_other_results):
+										log_line(log)
+										log.info('=== ' + self.model.other_tasks[i]['name'] + ' ===')
+										log.info(_other_result.log_line)
+										log.info(_other_result.detailed_results)
+										log_line(log)
+								
 								result_dict[self.corpus.targets[index]]=current_result.main_score*100
 								print_sent+=self.corpus.targets[index]+'\t'+f'{result_dict[self.corpus.targets[index]]:.2f}'+'\t'
 								loss_list.append(dev_loss)
-								# log.info(current_result.log_line)
-								# log.info(current_result.detailed_results)
+								log.info(current_result.log_line)
+								log.info(current_result.detailed_results)
 						else:
 							assert 0, 'not defined!'
 						mavg=sum(result_dict.values())/len(result_dict)
@@ -2154,10 +2166,24 @@ class ModelFinetuner(ModelDistiller):
 					out_path=base_path / f"{subset}.tsv",
 					embeddings_storage_mode="cpu",
 				)
+				if self.model.other_tasks:
+					test_results, _other_results = test_results
+					
+					for i, _other_result in enumerate(_other_results):
+						log_line(log)
+						log.info('=== ' + self.model.other_tasks[i]['name'] + ' ===')
+						log.info(_other_result.log_line)
+						log.info(_other_result.detailed_results)
+						log_line(log)
+
+				log_line(log)
+				log.info('=== NER ===')
 				test_results: Result = test_results
 				log.info(test_results.log_line)
 				log.info(test_results.detailed_results)
 				log_line(log)
+
+
 				# if self.model.embedding_selector:
 				#   print(sorted(loader[0].features.keys()))
 				#   print(self.model.selector)
@@ -2225,6 +2251,15 @@ class ModelFinetuner(ModelDistiller):
 					out_path=base_path / f"{self.corpus.targets[index]}-test.tsv",
 					embeddings_storage_mode="none",
 				)
+				if self.model.other_tasks:
+					current_result, _other_results = current_result
+					
+					for i, _other_result in enumerate(_other_results):
+						log_line(log)
+						log.info('=== ' + self.model.other_tasks[i]['name'] + ' ===')
+						log.info(_other_result.log_line)
+						log.info(_other_result.detailed_results)
+						log_line(log)
 				log.info(current_result.log_line)
 				log.info(current_result.detailed_results)
 				if quiet_mode:
@@ -2254,6 +2289,16 @@ class ModelFinetuner(ModelDistiller):
 
 			return final_score
 		return 0
+
+	
+	def gpu_friendly_assign_embedding(self, *args, **kwargs):
+		# a hack to preserve the nonlocal tokens for the use of evaluation for other tasks by cwhsu
+
+		self.model.remove_x = False
+		super().gpu_friendly_assign_embedding( *args, **kwargs)
+		self.model.remove_x = True
+		
+
 	def find_learning_rate(
 		self,
 		base_path: Union[Path, str],
