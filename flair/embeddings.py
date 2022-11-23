@@ -2934,6 +2934,9 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         sentence_feat: bool = False,
         use_relative_positions_for_nonlocals: bool = False,  # by cwhsu
         custom_embeddings_params = None,  # by cwhsu
+        merge_custom_embeddings = None,  # by cwhsu
+        init_custom_embeddings = None,  # by cwhsu
+        init_custom_embeddings_std = 1.0,  # by cwhsu
         **kwargs
     ):
         """
@@ -2978,14 +2981,21 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         #   ...
         # }
         if custom_embeddings_params is not None:
+            self.merge_custom_embeddings = merge_custom_embeddings
             for field, item in custom_embeddings_params.items():
                 if 'attr_name' not in item:
                     item['attr_name'] = field + '_embeddings'
                     if 'params' not in item:
                         item['params'] = {}
                     item['params']['padding_idx'] = 1
-                    item['params']['embedding_dim'] = self.model.embeddings.word_embeddings.embedding_dim
-
+                    if merge_custom_embeddings == 'add':
+                        if 'embedding_dim' in item['params']:
+                            log.warn('embedding_dim of custom embedding for addition merging method cannot not be specified. The dimension of word embedding is used instead.')
+                        item['params']['embedding_dim'] = self.model.embeddings.word_embeddings.embedding_dim
+                    elif merge_custom_embeddings == 'reproject+add':
+                        assert 'embedding_dim' in item['params']
+                    elif merge_custom_embeddings == 'concat':
+                        assert 'embedding_dim' in item['params']
                     # include padding token (default id: 1, fixed embedding), and other special tokens like bos and eos (default id: 0)
                     item['params']['num_embeddings'] = len(item['vocab']) + 2
 
@@ -2994,10 +3004,38 @@ class TransformerWordEmbeddings(TokenEmbeddings):
 
             self.model.embeddings.custom_embeddings = torch.nn.ModuleDict()
             for field, item in custom_embeddings_params.items():
-                _embedding = torch.nn.Embedding(**item['params'], 
-                    _weight=torch.zeros(item['params']['num_embeddings'], item['params']['embedding_dim'])
-                )  # zeros initialization embeddings to avoid deteriorating the originla embeddings based on experimental experiences.
+                # === init of embeddings ===
+                # _embedding = torch.nn.Embedding(**item['params'], 
+                #     _weight=torch.zeros(item['params']['num_embeddings'], item['params']['embedding_dim'])
+                # )  # zeros initialization embeddings to avoid deteriorating the originla embeddings based on experimental experiences.
+                _embedding = torch.nn.Embedding(**item['params'])
+                if init_custom_embeddings is not None:
+                    if init_custom_embeddings == 'zero':
+                        _embedding.weight = Parameter(torch.zeros(item['params']['num_embeddings'], item['params']['embedding_dim']))
+                    elif init_custom_embeddings == 'normal':
+                        torch.nn.init.normal_(_embedding.weight, std=init_custom_embeddings_std)
+                        if _embedding.padding_idx is not None:
+                            with torch.no_grad():
+                                _embedding.weight[_embedding.padding_idx].fill_(0)
+                    else:
+                        raise ValueError(init_custom_embeddings)
+
+                # === add embeddings to transformer word embeddings attributes ===
                 self.model.embeddings.custom_embeddings[item['attr_name']] = _embedding
+                if merge_custom_embeddings == 'reproject+add':
+                    setattr(self.model.embeddings, field + '_reproject_linear',
+                            torch.nn.Linear(
+                                item['params']['embedding_dim'],
+                                self.model.embeddings.word_embeddings.embedding_dim
+                        ))
+
+            if merge_custom_embeddings == 'concat':
+                self.model.embeddings.reproject_linear_after_concat = \
+                    torch.nn.Linear(
+                        self.model.embeddings.word_embeddings.embedding_dim + sum([item['params']['embedding_dim'] for item in custom_embeddings_params.values()]),
+                        self.model.embeddings.word_embeddings.embedding_dim
+                    )
+            
         # ======================== custom embedding ==========================
 
         self.allow_long_sentences = allow_long_sentences
@@ -3355,12 +3393,30 @@ class TransformerWordEmbeddings(TokenEmbeddings):
             # ========== custom embeddings ==========
             if hasattr(self, 'custom_embeddings_params') and self.custom_embeddings_params is not None:
                 inputs_embeds = self.model.embeddings.word_embeddings(input_ids)
+                all_custom_embeddings = []
                 for field, field_params in self.custom_embeddings_params.items():
                     _embedding = self.model.embeddings.custom_embeddings[field_params['attr_name']]
                     _ids = self._get_ids_for_custom_embedding(field, sentences, subtokenized_sentences_token_lengths)
                     # import pdb; pdb.set_trace()
                     assert _ids.shape == input_ids.shape
-                    inputs_embeds += _embedding(_ids)
+                    _custom_embeddings = _embedding(_ids)
+                    all_custom_embeddings.append(_custom_embeddings)
+                
+                
+                if self.merge_custom_embeddings == 'concat':
+                    inputs_embeds = self.model.embeddings.reproject_linear_after_concat(torch.cat([inputs_embeds, *all_custom_embeddings], -1))
+                else:
+                    if self.merge_custom_embeddings == 'reproject+add':
+                        for i in range(len(all_custom_embeddings)):
+                            field = list(self.custom_embeddings_params.keys())[i]
+                            all_custom_embeddings[i] = getattr(self.model.embeddings, field + '_reproject_linear')(_custom_embeddings)
+                    elif self.merge_custom_embeddings == 'add':
+                        pass
+                    else:
+                        raise ValueError(self.merge_custom_embeddings)
+                    for _custom_embeddings in all_custom_embeddings:
+                        inputs_embeds += _custom_embeddings
+                    
                 # print(input_ids.shape)
                 # import pdb; pdb.set_trace()
                 sequence_output, pooled_output, hidden_states = self.model(attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
