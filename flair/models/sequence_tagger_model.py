@@ -273,13 +273,13 @@ class SequenceTagger(flair.nn.Model):
 
 		if not self.new_drop:
 			if dropout > 0.0:
-			  self.dropout = torch.nn.Dropout(dropout)
+				self.dropout = torch.nn.Dropout(dropout)
 
 			if word_dropout > 0.0:
-			  self.word_dropout = flair.nn.WordDropout(word_dropout)
+				self.word_dropout = flair.nn.WordDropout(word_dropout)
 
 			if locked_dropout > 0.0:
-			  self.locked_dropout = flair.nn.LockedDropout(locked_dropout)
+				self.locked_dropout = flair.nn.LockedDropout(locked_dropout)
 		else:
 			self.dropout1 = torch.nn.Dropout(p=dropout)
 			self.dropout2 = torch.nn.Dropout(p=dropout)
@@ -1000,27 +1000,27 @@ class SequenceTagger(flair.nn.Model):
 		else:
 			# initialize zero-padded word embeddings tensor
 			sentence_tensor = torch.zeros(
-			  [
-				  len(sentences),
-				  longest_token_sequence_in_batch,
-				  self.embeddings.embedding_length,
-			  ],
-			  dtype=torch.float,
-			  device=flair.device,
+				[
+					len(sentences),
+					longest_token_sequence_in_batch,
+					self.embeddings.embedding_length,
+				],
+				dtype=torch.float,
+				device=flair.device,
 			)
 
 			for s_id, sentence in enumerate(sentences):
-			  # fill values with word embeddings
-			  sentence_tensor[s_id][: len(sentence)] = torch.cat(
-				  [token.get_embedding().unsqueeze(0) for token in sentence], 0
-			  )
+				# fill values with word embeddings
+				sentence_tensor[s_id][: len(sentence)] = torch.cat(
+					[token.get_embedding().unsqueeze(0) for token in sentence], 0
+				)
 			# import pdb; pdb.set_trace()
 			# sentence_tensor = sentence_tensor.to(flair.device)
 		# # TODO: this can only be removed once the implementations of word_dropout and locked_dropout have a batch_first mode
 
 		sentence_tensor = sentence_tensor.transpose_(0, 1)
 		if self.new_drop:
-		  sentence_tensor = self.dropout1(sentence_tensor)
+			sentence_tensor = self.dropout1(sentence_tensor)
 		else:
 			if self.use_dropout > 0.0:
 				sentence_tensor = self.dropout(sentence_tensor)
@@ -1052,12 +1052,12 @@ class SequenceTagger(flair.nn.Model):
 			)
 			if not self.new_drop:
 				if self.use_dropout > 0.0:
-				  sentence_tensor = self.dropout(sentence_tensor)
+					sentence_tensor = self.dropout(sentence_tensor)
 				# word dropout only before LSTM - TODO: more experimentation needed
 				# if self.use_word_dropout > 0.0:
 				#     sentence_tensor = self.word_dropout(sentence_tensor)
 				if self.use_locked_dropout > 0.0:
-				  sentence_tensor = self.locked_dropout(sentence_tensor)
+					sentence_tensor = self.locked_dropout(sentence_tensor)
 			# if self.use_dropout > 0.0:
 			#   sentence_tensor = self.dropout(sentence_tensor)
 			# # word dropout only before LSTM - TODO: more experimentation needed
@@ -1084,7 +1084,7 @@ class SequenceTagger(flair.nn.Model):
 			# transpose to batch_first mode
 			sentence_tensor = sentence_tensor.transpose_(0, 1)
 		if self.new_drop:
-		  sentence_tensor = self.dropout2(sentence_tensor)
+			sentence_tensor = self.dropout2(sentence_tensor)
 		if self.use_decoder_timer:
 			self.time=time.time()
 		if self.calculate_l2_loss:
