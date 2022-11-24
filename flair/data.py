@@ -1080,10 +1080,10 @@ class Corpus:
     def get_all_sentences(self) -> Dataset:
         return ConcatDataset([self.train, self.dev, self.test])
 
-    def make_tag_dictionary(self, tag_type: str) -> Dictionary:
+    def make_tag_dictionary(self, tag_type: str, add_unk=True) -> Dictionary:
 
         # Make the tag dictionary
-        tag_dictionary: Dictionary = Dictionary()
+        tag_dictionary: Dictionary = Dictionary(add_unk)
         tag_dictionary.add_item("O")
         for i,sentence in enumerate(self.get_all_sentences()):
             for token in sentence.tokens:

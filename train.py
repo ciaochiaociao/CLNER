@@ -55,6 +55,7 @@ parser.add_argument('--test_speed', action='store_true', help='test the running 
 parser.add_argument('--predict_posterior', action='store_true', help='predict the posterior distribution of CRF model')
 parser.add_argument('--batch_size', default=-1, help='manually setting the mini batch size for testing')
 parser.add_argument('--keep_embedding', default=-1, help='mask out all embeddings except the index, for analysis')
+parser.add_argument('--toy_test', action='store_true')  # by cwhsu
 parser.add_argument('--force', action='store_true')
 
 
@@ -92,6 +93,12 @@ pprint(args)
 
 student=config.create_student(nocrf=args.nocrf)
 log.info(f"Model Size: {count_parameters(student)}")
+
+# import pdb; pdb.set_trace()
+# toy corpus for testing by cwhsu
+# if args.toy_test:
+# 	config.corpus=config.corpus.downsample(0.05)
+
 corpus=config.corpus
 
 

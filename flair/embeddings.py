@@ -2932,11 +2932,16 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         v2_doc: bool = False,
         ext_doc: bool = False,
         sentence_feat: bool = False,
-        use_relative_positions_for_nonlocals: bool = False,  # by cwhsu
-        custom_embeddings_params = None,  # by cwhsu
-        merge_custom_embeddings = None,  # by cwhsu
-        init_custom_embeddings = None,  # by cwhsu
-        init_custom_embeddings_std = 1.0,  # by cwhsu
+
+        # by cwhsu
+        use_relative_positions_for_nonlocals: bool = False,
+        custom_embeddings_params = None,
+        merge_custom_embeddings = None,
+        init_custom_embeddings = None,
+        init_custom_embeddings_std = 1.0,
+        use_relative_positions_for_nonlocals: bool = False,
+        custom_embeddings_params = None,
+        tokenizer_params = None,
         **kwargs
     ):
         """
@@ -2961,9 +2966,12 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
         self.use_relative_positions_for_nonlocals = use_relative_positions_for_nonlocals  # by cwhsu
+        
+        if tokenizer_params is None:
+            tokenizer_params = {}
 
         # load tokenizer and transformer model
-        self.tokenizer = AutoTokenizer.from_pretrained(model, **kwargs)
+        self.tokenizer = AutoTokenizer.from_pretrained(model, **tokenizer_params)
         config = AutoConfig.from_pretrained(model, output_hidden_states=True, **kwargs)
         self.model = AutoModel.from_pretrained(model, config=config, **kwargs)
 
@@ -3087,6 +3095,9 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                 self.special_tokens.append(self.tokenizer.cls_token)
         except:
             pass
+        if 'additional_special_tokens' in tokenizer_params:
+            self.special_tokens.append(tokenizer_params['additional_special_tokens'])
+            self.model.resize_token_embeddings(len(self.tokenizer))
         self.document_extraction = document_extraction
         self.v2_doc = v2_doc
         self.ext_doc = ext_doc
@@ -3422,6 +3433,7 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                 sequence_output, pooled_output, hidden_states = self.model(attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
             # =========================================
             else:
+                # import pdb; pdb.set_trace()
                 sequence_output, pooled_output, hidden_states = self.model(input_ids, attention_mask=mask, inputs_embeds = inputs_embeds, **model_params)
 
             if self.sentence_feat:

@@ -102,9 +102,11 @@ class ConfigParser:
 		# keep the consistency of tag dictionary
 		if 'tag_dictionary' in self.config[self.target] and Path(self.config[self.target]['tag_dictionary']).exists():
 			self.tag_dictionary=Dictionary.load_from_file(self.config[self.target]['tag_dictionary'])
-			# pdb.set_trace()
 		else:
-			self.tag_dictionary = self.corpus.make_tag_dictionary(tag_type=self.target)
+			add_unk = True
+			if 'add_unk' in self.config[self.target]:
+				add_unk = self.config[self.target]
+			self.tag_dictionary = self.corpus.make_tag_dictionary(tag_type=self.target, add_unk=add_unk)
 			if 'tag_dictionary' in self.config[self.target]:
 				self.tag_dictionary.save(self.config[self.target]['tag_dictionary'])
 
@@ -210,7 +212,6 @@ class ConfigParser:
 		if _has_rel_pos_attr:
 			use_relative_positions_for_nonlocals = tfm_embed.use_relative_positions_for_nonlocals
 		# ----------------------
-
 		#
 		if pretrained:
 			if is_student and 'pretrained_model' in config:
