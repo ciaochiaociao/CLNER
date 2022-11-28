@@ -24,6 +24,7 @@ import os, shutil
 import logging
 from flair.custom_data_loader import ColumnDataLoader
 from flair.datasets import DataLoader
+from process import wait_for_process
 # Disable
 def blockPrint():
 		sys.stdout = open(os.devnull, 'w')
@@ -55,7 +56,9 @@ parser.add_argument('--test_speed', action='store_true', help='test the running 
 parser.add_argument('--predict_posterior', action='store_true', help='predict the posterior distribution of CRF model')
 parser.add_argument('--batch_size', default=-1, help='manually setting the mini batch size for testing')
 parser.add_argument('--keep_embedding', default=-1, help='mask out all embeddings except the index, for analysis')
+parser.add_argument('--pid_to_wait', type=int)
 parser.add_argument('--force', action='store_true')
+
 
 
 def count_parameters(model):
@@ -70,6 +73,9 @@ def count_parameters(model):
 
 log = logging.getLogger("flair")
 args = parser.parse_args()
+
+wait_for_process(args.pid_to_wait)
+
 if args.quiet:
 	blockPrint()
 	log.disabled=True
