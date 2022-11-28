@@ -1,4 +1,5 @@
 import os
+import pickle
 import re
 import logging
 from abc import abstractmethod
@@ -2991,11 +2992,12 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         if custom_embeddings_params is not None:
             self.merge_custom_embeddings = merge_custom_embeddings
             for field, item in custom_embeddings_params.items():
-                if 'attr_name' not in item:
+                if 'attr_name' not in item:  # TODO: strange! Addtional level??
                     item['attr_name'] = field + '_embeddings'
+
                     if 'params' not in item:
                         item['params'] = {}
-                    item['params']['padding_idx'] = 1
+
                     if merge_custom_embeddings == 'add':
                         if 'embedding_dim' in item['params']:
                             log.warn('embedding_dim of custom embedding for addition merging method cannot not be specified. The dimension of word embedding is used instead.')
@@ -3004,19 +3006,36 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                         assert 'embedding_dim' in item['params']
                     elif merge_custom_embeddings == 'concat':
                         assert 'embedding_dim' in item['params']
-                    # include padding token (default id: 1, fixed embedding), and other special tokens like bos and eos (default id: 0)
-                    item['params']['num_embeddings'] = len(item['vocab']) + 2
+
+                    if 'vocab_path' in item:
+                        with open(item['vocab_path'], 'rb') as f:
+                            vocab: Dictionary = pickle.load(f)
+                        if 'vocab' in item:
+                            log.warn('The vocab provided is overwritten by another vocab provided by the vocab_path!')
+                        item['vocab'] = vocab.get_items()
+                    item['vocab'].extend(item['additional_special_tokens'])  # some other special tokens in tag space, such as <EOS>, <MASK> during data generation
+                    log.info(f"The vocab is loaded from {item['vocab_path']}. The vocabulary including special tokens is below:\n{item['vocab']}")
+                    # include program-specific tokens, e.g., padding token (default id: 1, fixed embedding), bos / eos token
+                    # this corresponds to how _get_ids_for_custom_embedding() works and simulate how "position_embeddings" works
+                    # , where padding token (default id: 1, fixed embedding) , and other special tokens like bos and eos (default id: 0) are used.
+                    item['params']['padding_idx'] = len(item['vocab'])
+                    item['bos_idx'] = item['eos_idx'] = item['params']['padding_idx'] + 1
+                    if item['use_different_eos']:
+                        item['eos_idx'] = item['bos_idx'] + 1
+
+                    item['params']['num_embeddings'] = len(item['vocab']) + len(set([item['params']['padding_idx'], item['bos_idx'], item['eos_idx']]))
 
             self.custom_embeddings_params = custom_embeddings_params
             log.info('=============== CUSTOM EMBEDDINGS ===============\n' + yaml.dump(custom_embeddings_params))
 
             self.model.embeddings.custom_embeddings = torch.nn.ModuleDict()
             for field, item in custom_embeddings_params.items():
+                _embedding = torch.nn.Embedding(**item['params'])
+
                 # === init of embeddings ===
                 # _embedding = torch.nn.Embedding(**item['params'], 
                 #     _weight=torch.zeros(item['params']['num_embeddings'], item['params']['embedding_dim'])
                 # )  # zeros initialization embeddings to avoid deteriorating the originla embeddings based on experimental experiences.
-                _embedding = torch.nn.Embedding(**item['params'])
                 if init_custom_embeddings is not None:
                     if init_custom_embeddings == 'zero':
                         _embedding.weight = Parameter(torch.zeros(item['params']['num_embeddings'], item['params']['embedding_dim']))
@@ -3027,6 +3046,25 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                                 _embedding.weight[_embedding.padding_idx].fill_(0)
                     else:
                         raise ValueError(init_custom_embeddings)
+                
+                # load pretrained weight for the tags but the special token, for which normally we do not have pretrained embedding
+                if 'from_pretrained' in item:
+                    _path = item['from_pretrained']
+                    with open(_path, 'rb') as f:
+                        w: torch.tensor = pickle.load(f)
+                        w.requires_grad = True
+                    
+                    # create another one that is non-leaf variable, which supports gradient descent (autograd) for in-place operation, e.g., assignment
+                    # ref: https://discuss.pytorch.org/t/leaf-variable-was-used-in-an-inplace-operation/308?u=ptrblck
+                    _w = _embedding.weight.clone()
+                    _w[:len(w)] = w
+                    
+                    _embedding.weight = torch.nn.Parameter(_w)
+
+                    # import pdb; pdb.set_trace()
+
+                    log.warn(f">>> Load pretrained custom embedding from {_path}\n"
+                        f"Remember to also load the same tag dictionary of the pretrained tag embedding.\nCurrently loaded tags from: {item['vocab_path']}")
 
                 # === add embeddings to transformer word embeddings attributes ===
                 self.model.embeddings.custom_embeddings[item['attr_name']] = _embedding
@@ -3182,15 +3220,17 @@ class TransformerWordEmbeddings(TokenEmbeddings):
 
     def _get_ids_for_custom_embedding(self, field, sentences, subtoken_lengths):  # by cwhsu
         field_params = self.custom_embeddings_params[field]
-        padding_idx = field_params['params']['padding_idx']
+        padding_idx = int(field_params['params']['padding_idx'])
+        bos_idx = int(field_params['bos_idx'])
+        eos_idx = int(field_params['eos_idx'])
         # encode and batch
         def _get_id(text):
-            return field_params['vocab'].index(text) + padding_idx + 1  # starting from padding_idx
+            return field_params['vocab'].index(text)
         max_len = max([sum(l) for l in subtoken_lengths])
         all_ids = torch.ones(len(sentences), max_len+2, dtype=torch.long, device=flair.device) * padding_idx
         assert len(sentences) == len(subtoken_lengths)
         for six, (sentence, _subtoken_lengths) in enumerate(zip(sentences, subtoken_lengths)):
-            all_ids[six][0] = 0  # bos
+            all_ids[six][0] = bos_idx  # bos of the whole sequence, not the bos of each nonlocal sentence
             tix = 1
             assert len(sentence) == len(_subtoken_lengths)
             for token, _subtoken_length in zip(sentence.tokens, _subtoken_lengths):
@@ -3200,8 +3240,12 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                     device=flair.device
                 )
                 tix += _subtoken_length
-            all_ids[six][tix] = 0 # eos
-
+            all_ids[six][tix] = eos_idx  # eos of the whole sequence, not the eos of each nonlocal sentence
+        
+        # print([[(i, t.get_tag('predict')) for i, t in enumerate(s)] for s in sentences])
+        # print([[(field_params['vocab'][id.item()] if id.item() not in set([padding_idx, bos_idx, eos_idx]) else id.item()) for id in s] for s in all_ids])
+        # print([self.tokenizer.convert_ids_to_tokens(self.tokenizer(s.to_original_text(), padding=True)['input_ids']) for s in sentences])
+        # import pdb; pdb.set_trace()
         return all_ids
 
     def _add_embeddings_to_sentences(self, sentences: List[Sentence]):
