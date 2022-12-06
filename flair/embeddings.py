@@ -2940,8 +2940,6 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         merge_custom_embeddings = None,
         init_custom_embeddings = None,
         init_custom_embeddings_std = 1.0,
-        use_relative_positions_for_nonlocals: bool = False,
-        custom_embeddings_params = None,
         tokenizer_params = None,
         **kwargs
     ):
@@ -3134,7 +3132,7 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         except:
             pass
         if 'additional_special_tokens' in tokenizer_params:
-            self.special_tokens.append(tokenizer_params['additional_special_tokens'])
+            self.special_tokens.extend(tokenizer_params['additional_special_tokens'])
             self.model.resize_token_embeddings(len(self.tokenizer))
         self.document_extraction = document_extraction
         self.v2_doc = v2_doc

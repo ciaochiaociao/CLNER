@@ -13,7 +13,7 @@ def wait_for_process(pid_to_wait, show_dynamic_status=False):
         if not show_dynamic_status:
             p.wait()
         else:
-            while p.is_running():
+            while psutil.pid_exists(pid_to_wait):
                 time.sleep(2)
                 dynamic_status(p)
         print(f'\n >> {pid_to_wait} is finished at {time.ctime(time.time())}')
