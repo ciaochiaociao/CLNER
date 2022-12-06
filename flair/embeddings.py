@@ -2990,40 +2990,40 @@ class TransformerWordEmbeddings(TokenEmbeddings):
         if custom_embeddings_params is not None:
             self.merge_custom_embeddings = merge_custom_embeddings
             for field, item in custom_embeddings_params.items():
-                if 'attr_name' not in item:  # TODO: strange! Addtional level??
+                if 'attr_name' not in item:
                     item['attr_name'] = field + '_embeddings'
 
-                    if 'params' not in item:
-                        item['params'] = {}
+                if 'params' not in item:
+                    item['params'] = {}
 
-                    if merge_custom_embeddings == 'add':
-                        if 'embedding_dim' in item['params']:
-                            log.warn('embedding_dim of custom embedding for addition merging method cannot not be specified. The dimension of word embedding is used instead.')
-                        item['params']['embedding_dim'] = self.model.embeddings.word_embeddings.embedding_dim
-                    elif merge_custom_embeddings == 'reproject+add':
-                        assert 'embedding_dim' in item['params']
-                    elif merge_custom_embeddings == 'concat':
-                        assert 'embedding_dim' in item['params']
+                if merge_custom_embeddings == 'add':
+                    if 'embedding_dim' in item['params']:
+                        log.warn('embedding_dim of custom embedding for addition merging method cannot not be specified. The dimension of word embedding is used instead.')
+                    item['params']['embedding_dim'] = self.model.embeddings.word_embeddings.embedding_dim
+                elif merge_custom_embeddings == 'reproject+add':
+                    assert 'embedding_dim' in item['params']
+                elif merge_custom_embeddings == 'concat':
+                    assert 'embedding_dim' in item['params']
 
-                    if 'vocab_path' in item:
-                        with open(item['vocab_path'], 'rb') as f:
-                            vocab: Dictionary = pickle.load(f)
-                        if 'vocab' in item:
-                            log.warn('The vocab provided is overwritten by another vocab provided by the vocab_path!')
-                        item['vocab'] = vocab.get_items()
-                        log.info(f"The vocab is loaded from {item['vocab_path']}")
-                    if 'additional_special_tokens' in item:
-                        item['vocab'].extend(item['additional_special_tokens'])  # some other special tokens in tag space, such as <EOS>, <MASK> during data generation
-                    log.info("The vocabulary including special tokens is below:\n{item['vocab']}")
-                    # include program-specific tokens, e.g., padding token (default id: 1, fixed embedding), bos / eos token
-                    # this corresponds to how _get_ids_for_custom_embedding() works and simulate how "position_embeddings" works
-                    # , where padding token (default id: 1, fixed embedding) , and other special tokens like bos and eos (default id: 0) are used.
-                    item['params']['padding_idx'] = len(item['vocab'])
-                    item['bos_idx'] = item['eos_idx'] = item['params']['padding_idx'] + 1
-                    if item['use_different_eos']:
-                        item['eos_idx'] = item['bos_idx'] + 1
+                if 'vocab_path' in item:
+                    with open(item['vocab_path'], 'rb') as f:
+                        vocab: Dictionary = pickle.load(f)
+                    if 'vocab' in item:
+                        log.warn('The vocab provided is overwritten by another vocab provided by the vocab_path!')
+                    item['vocab'] = vocab.get_items()
+                    log.info(f"The vocab is loaded from {item['vocab_path']}")
+                if 'additional_special_tokens' in item:
+                    item['vocab'].extend(item['additional_special_tokens'])  # some other special tokens in tag space, such as <EOS>, <MASK> during data generation
+                log.info("The vocabulary including special tokens is below:\n{item['vocab']}")
+                # include program-specific tokens, e.g., padding token (default id: 1, fixed embedding), bos / eos token
+                # this corresponds to how _get_ids_for_custom_embedding() works and simulate how "position_embeddings" works
+                # , where padding token (default id: 1, fixed embedding) , and other special tokens like bos and eos (default id: 0) are used.
+                item['params']['padding_idx'] = len(item['vocab'])
+                item['bos_idx'] = item['eos_idx'] = item['params']['padding_idx'] + 1
+                if item['use_different_eos']:
+                    item['eos_idx'] = item['bos_idx'] + 1
 
-                    item['params']['num_embeddings'] = len(item['vocab']) + len(set([item['params']['padding_idx'], item['bos_idx'], item['eos_idx']]))
+                item['params']['num_embeddings'] = len(item['vocab']) + len(set([item['params']['padding_idx'], item['bos_idx'], item['eos_idx']]))
 
             self.custom_embeddings_params = custom_embeddings_params
             log.info('=============== CUSTOM EMBEDDINGS ===============\n' + yaml.dump(custom_embeddings_params))
