@@ -1,3 +1,4 @@
+import math
 import warnings
 import logging
 from pathlib import Path
@@ -96,6 +97,74 @@ def pad_tensors(tensor_list):
 
 
 # ohf = torch.tensor([0.321123])
+class LinearForExisting(torch.nn.Module):
+	def __init__(self, existing_weight, bias, special_indices, use_factor=False, affine_transform=False):
+		super().__init__()
+		self.existing_weight = existing_weight
+		self.special_indices = special_indices
+		self.affine_transform = affine_transform
+		self.affine_transform_type, self.affine_transform_dim =  affine_transform.split('_')
+		self.use_factor = use_factor
+		if affine_transform:
+			shape = existing_weight.shape
+			_shape = shape = (existing_weight.shape[0] - len(special_indices), existing_weight.shape[1])
+			if self.affine_transform_dim.lower() == '1d':
+				_shape = _shape[1]
+			else:
+				assert self.affine_transform_dim.lower() == '2d'
+
+			if self.affine_transform_type == 'affine':
+				self.affine_linear = torch.nn.Parameter(torch.ones(_shape))
+				self.affine_bias = torch.nn.Parameter(torch.zeros(_shape))
+			else:
+				assert self.affine_transform_type == 'norm'
+				self.weight_norm = torch.nn.LayerNorm(_shape)
+		if use_factor:
+			self.factor = torch.nn.Parameter(torch.ones(shape[0]))
+		if bias:
+			self.bias = torch.nn.Parameter(torch.Tensor(shape[0]))  # remove the special tokens in predict tags that will not be in the output: <START>, <STOP>, <>
+			self.reset_parameters()
+		else:
+			self.bias = None
+
+	def forward(self, data):
+		return self.bias + data
+
+	def reset_parameters(self):
+		fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(self.existing_weight)
+		bound = 1 / math.sqrt(fan_in)
+		torch.nn.init.uniform_(self.bias, -bound, bound)
+
+	def forward(self, data):
+		w = self.existing_weight[[i for i in range(len(self.existing_weight)) if i not in self.special_indices]].to(flair.device)
+
+		if self.affine_transform:
+			if self.affine_transform_type == 'affine':
+				w = self.affine_linear * w + self.affine_bias
+			else:
+				w = self.weight_norm(w)
+		output = data @ w.T
+		if self.use_factor:
+			output = self.factor * output
+		if self.bias is not None:
+			output = output + self.bias
+
+		return output
+
+
+def _get_tag_embed(embeddings):
+	return embeddings.embeddings[0].model.embeddings.custom_embeddings.predict_embeddings
+
+
+def _get_speical_indices(tagger):
+	_p = tagger.embeddings.embeddings[0].custom_embeddings_params['predict']
+	special_indices = set([_p['bos_idx'], _p['eos_idx'], _p['params']['padding_idx']])
+	for t in _p['additional_special_tokens']:
+		special_indices.add(_p['vocab'].index(t))
+	special_indices = list(special_indices)
+	return special_indices
+
+
 class SequenceTagger(flair.nn.Model):
 	def __init__(
 		self,
@@ -161,8 +230,13 @@ class SequenceTagger(flair.nn.Model):
 		calculate_l2_loss: bool = False,
 		l2_loss_only: bool = False,
 		# ==== other tasks (by cwhsu) ===
-		other_tasks: bool = None,
-		loss_weight: float = 1.0  # loss_weight for NER
+		other_tasks: dict = None,
+		loss_weight: float = 1.0,  # loss_weight for NER
+		share_last_cls_and_tag_embed: bool = False,
+		affine_for_last_cls: bool = False,
+		factor_for_last_cls: bool = False,
+		mse_loss_on_last_cls_and_tag_embed: bool = False,
+		mse_loss_weight: float = 1.0,
 	):
 		"""
 		Initializes a SequenceTagger
@@ -252,6 +326,11 @@ class SequenceTagger(flair.nn.Model):
 		self.calculate_l2_loss = calculate_l2_loss
 		self.l2_loss_only = l2_loss_only
 
+		self.share_last_cls_and_tag_embed = share_last_cls_and_tag_embed
+		self.affine_for_last_cls = affine_for_last_cls
+		self.factor_for_last_cls = factor_for_last_cls
+		self.mse_loss_on_last_cls_and_tag_embed = mse_loss_on_last_cls_and_tag_embed
+		self.mse_loss_weight = mse_loss_weight
 		
 		# pdb.set_trace()
 
@@ -386,9 +465,14 @@ class SequenceTagger(flair.nn.Model):
 				hidden_size * num_directions, len(tag_dictionary)
 			)
 		else:
-			self.linear = torch.nn.Linear(
-				self.embeddings.embedding_length, len(tag_dictionary)
-			)
+			if share_last_cls_and_tag_embed:
+				tag_embed = _get_tag_embed(embeddings)
+				special_indices = _get_speical_indices(self)
+				self.linear = LinearForExisting(tag_embed.weight, True, special_indices, factor_for_last_cls, affine_for_last_cls)
+			else:
+				self.linear = torch.nn.Linear(
+					self.embeddings.embedding_length, len(tag_dictionary)
+				)
 
 		# ============ for other tasks ============
 		self.loss_weight = loss_weight  # for NER task
@@ -519,6 +603,11 @@ class SequenceTagger(flair.nn.Model):
 			# cwhsu
 			"other_tasks": self.other_tasks,
 			"loss_weight": self.loss_weight,
+			"share_last_cls_and_tag_embed": self.share_last_cls_and_tag_embed,
+			"affine_for_last_cls": self.affine_for_last_cls,
+			"factor_for_last_cls": self.factor_for_last_cls,
+			"mse_loss_on_last_cls_and_tag_embed": self.mse_loss_on_last_cls_and_tag_embed,
+			"mse_loss_weight": self.mse_loss_weight,
 		}
 		return model_state
 
@@ -1968,6 +2057,11 @@ class FastSequenceTagger(SequenceTagger):
 			# other tasks by cwhsu
 			other_tasks = None if "other_tasks" not in state else state["other_tasks"],
 			loss_weight = 1.0 if "loss_weight" not in state else state["loss_weight"],  # loss_weight for NER
+			share_last_cls_and_tag_embed = False if "share_last_cls_and_tag_embed" not in state else state["share_last_cls_and_tag_embed"],
+			affine_for_last_cls = False if "affine_for_last_cls" not in state else state["affine_for_last_cls"],
+			factor_for_last_cls = False if "factor_for_last_cls" not in state else state["factor_for_last_cls"],
+			mse_loss_on_last_cls_and_tag_embed = False if "mse_loss_on_last_cls_and_tag_embed" not in state else state["mse_loss_on_last_cls_and_tag_embed"],
+			mse_loss_weight = 1.0 if "mse_loss_weight" not in state else state["mse_loss_weight"],
 		)
 		model.load_state_dict(state["state_dict"])
 		return model
@@ -1986,6 +2080,13 @@ class FastSequenceTagger(SequenceTagger):
 		# target task
 		# import pdb; pdb.set_trace()
 		loss = self.loss_weight * self._calculate_loss(features, data_points, self.mask)
+
+		if self.mse_loss_on_last_cls_and_tag_embed:
+			tag_embed = _get_tag_embed(self.embeddings).weight
+			special_indices = _get_speical_indices(self)
+			w = tag_embed[[i for i in range(len(tag_embed)) if i not in special_indices]]
+			assert self.linear.weight.shape == w.shape
+			loss += self.mse_loss_weight * torch.nn.functional.mse_loss(self.linear.weight, w)
 
 		# === other tasks by cwhsu ===
 		for task_params in self.other_tasks:
