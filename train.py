@@ -6,7 +6,7 @@ import flair.datasets as datasets
 from flair.data import MultiCorpus, Corpus
 from flair.list_data import ListCorpus
 import flair.embeddings as Embeddings
-from flair.training_utils import EvaluationMetric
+from flair.training_utils import EvaluationMetric, add_file_handler
 from flair.visual.training_curves import Plotter
 # initialize sequence tagger
 from flair.models import SequenceTagger
@@ -83,6 +83,10 @@ if args.quiet:
 	blockPrint()
 	log.disabled=True
 config = Params.from_file(args.config)
+
+if args.test:
+	log_handler = add_file_handler(log, config.get_target_path / "testing.log")
+
 if args.test and args.zeroshot:
 	temperory_reject_list=['ast','enhancedud','dependency','atis','chunk']
 	if config['targets'] in temperory_reject_list:
@@ -185,6 +189,7 @@ elif args.test:
 		predict_posterior=args.predict_posterior,
 		# sort_data = not args.keep_order,
 	)
+	log.removeHandler(log_handler)
 elif args.parse or args.save_embedding:
 	print('Batch Size:',eval_mini_batch_size)
 	base_path=Path(config.config['target_dir'])/config.config['model_name']

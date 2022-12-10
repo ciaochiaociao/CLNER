@@ -98,16 +98,15 @@ def pad_tensors(tensor_list):
 
 # ohf = torch.tensor([0.321123])
 class LinearForExisting(torch.nn.Module):
-	def __init__(self, existing_weight, bias, special_indices, use_factor=False, affine_transform=False):
+	def __init__(self, existing_weight, bias, special_indices, use_factor=False, affine_transform=None):
 		super().__init__()
 		self.existing_weight = existing_weight
 		self.special_indices = special_indices
 		self.affine_transform = affine_transform
-		self.affine_transform_type, self.affine_transform_dim =  affine_transform.split('_')
 		self.use_factor = use_factor
+		_shape = shape = (existing_weight.shape[0] - len(special_indices), existing_weight.shape[1])
 		if affine_transform:
-			shape = existing_weight.shape
-			_shape = shape = (existing_weight.shape[0] - len(special_indices), existing_weight.shape[1])
+			self.affine_transform_type, self.affine_transform_dim =  affine_transform.split('_')
 			if self.affine_transform_dim.lower() == '1d':
 				_shape = _shape[1]
 			else:

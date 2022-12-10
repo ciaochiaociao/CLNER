@@ -2996,14 +2996,14 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                 if 'params' not in item:
                     item['params'] = {}
 
-                if merge_custom_embeddings == 'add':
+                if 'reproject' in merge_custom_embeddings:
+                    assert 'embedding_dim' in item['params']
+                elif 'concat' in merge_custom_embeddings:
+                    assert 'embedding_dim' in item['params']
+                elif 'add' in merge_custom_embeddings:
                     if 'embedding_dim' in item['params']:
                         log.warn('embedding_dim of custom embedding for addition merging method cannot not be specified. The dimension of word embedding is used instead.')
                     item['params']['embedding_dim'] = self.model.embeddings.word_embeddings.embedding_dim
-                elif merge_custom_embeddings == 'reproject+add':
-                    assert 'embedding_dim' in item['params']
-                elif merge_custom_embeddings == 'concat':
-                    assert 'embedding_dim' in item['params']
 
                 if 'vocab_path' in item:
                     with open(item['vocab_path'], 'rb') as f:
@@ -3050,16 +3050,12 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                 # load pretrained weight for the tags but the special token, for which normally we do not have pretrained embedding
                 if 'from_pretrained' in item:
                     _path = item['from_pretrained']
-                    with open(_path, 'rb') as f:
-                        w: torch.tensor = pickle.load(f)
-                        w.requires_grad = True
-                    
-                    # create another one that is non-leaf variable, which supports gradient descent (autograd) for in-place operation, e.g., assignment
-                    # ref: https://discuss.pytorch.org/t/leaf-variable-was-used-in-an-inplace-operation/308?u=ptrblck
-                    _w = _embedding.weight.clone()
-                    _w[:len(w)] = w
-                    
-                    _embedding.weight = torch.nn.Parameter(_w)
+                    with torch.no_grad():
+                        with open(_path, 'rb') as f:
+                            w: torch.tensor = pickle.load(f)
+                        if 'scale_pretrained' in item:
+                            w *= item['scale_pretrained']
+                        _embedding.weight[:len(w)] = w
 
                     # import pdb; pdb.set_trace()
 
@@ -3068,12 +3064,34 @@ class TransformerWordEmbeddings(TokenEmbeddings):
 
                 # === add embeddings to transformer word embeddings attributes ===
                 self.model.embeddings.custom_embeddings[item['attr_name']] = _embedding
-                if merge_custom_embeddings == 'reproject+add':
+                if 'reproject' in merge_custom_embeddings:
                     setattr(self.model.embeddings, field + '_reproject_linear',
                             torch.nn.Linear(
                                 item['params']['embedding_dim'],
                                 self.model.embeddings.word_embeddings.embedding_dim
                         ))
+                elif 'affine' in merge_custom_embeddings:
+                    
+                    _shape = [item['params']['num_embeddings'], self.model.embeddings.word_embeddings.embedding_dim]
+                    if '1d_dim' in merge_custom_embeddings:
+                        _shape[0] = 1
+                    elif '1d_num' in merge_custom_embeddings:
+                        _shape[1] = 1
+                    elif '2d' in merge_custom_embeddings:
+                        pass
+                    else:
+                        raise ValueError(merge_custom_embeddings)
+
+                    init_weight = item['init_affine_weight'] if 'init_affine_weight' in item else 1.0
+                    setattr(self.model.embeddings, field + '_affine_weight',
+                            Parameter(torch.ones(_shape) * init_weight))
+                    setattr(self.model.embeddings, field + '_affine_bias',
+                            Parameter(torch.zeros(_shape)))
+                
+                if 'factor' in merge_custom_embeddings:
+                    init_factor = item['init_factor'] if 'init_factor' in item else 1.0
+                    setattr(self.model.embeddings, field + '_factor',
+                            Parameter(torch.tensor(init_factor)))
 
             if merge_custom_embeddings == 'concat':
                 self.model.embeddings.reproject_linear_after_concat = \
@@ -3461,14 +3479,23 @@ class TransformerWordEmbeddings(TokenEmbeddings):
                 if self.merge_custom_embeddings == 'concat':
                     inputs_embeds = self.model.embeddings.reproject_linear_after_concat(torch.cat([inputs_embeds, *all_custom_embeddings], -1))
                 else:
-                    if self.merge_custom_embeddings == 'reproject+add':
-                        for i in range(len(all_custom_embeddings)):
-                            field = list(self.custom_embeddings_params.keys())[i]
-                            all_custom_embeddings[i] = getattr(self.model.embeddings, field + '_reproject_linear')(_custom_embeddings)
-                    elif self.merge_custom_embeddings == 'add':
-                        pass
-                    else:
-                        raise ValueError(self.merge_custom_embeddings)
+                    assert 'add' in self.merge_custom_embeddings
+                    for i in range(len(all_custom_embeddings)):
+                        field = list(self.custom_embeddings_params.keys())[i]
+                        if 'reproject' in self.merge_custom_embeddings:
+                            _custom_embeddings = getattr(self.model.embeddings, field + '_reproject_linear')(_custom_embeddings)
+                        elif 'affine' in self.merge_custom_embeddings:
+                            weight = getattr(self.model.embeddings, field + '_affine_weight')
+                            bias = getattr(self.model.embeddings, field + '_affine_bias')
+                            if '1d_num' in self.merge_custom_embeddings or '2d' in self.merge_custom_embeddings:
+                                weight = weight[_ids]
+                                bias = bias[_ids]
+                            _custom_embeddings = weight * _custom_embeddings
+                            _custom_embeddings = bias + _custom_embeddings
+
+                        if 'factor' in self.merge_custom_embeddings:
+                            _custom_embeddings = getattr(self.model.embeddings, field + '_factor') * _custom_embeddings
+                        all_custom_embeddings[i] = _custom_embeddings
                     for _custom_embeddings in all_custom_embeddings:
                         inputs_embeds += _custom_embeddings
                     
