@@ -164,6 +164,42 @@ def _get_speical_indices(tagger):
 	return special_indices
 
 
+def get_transform(matrix, method, **kwargs):
+	_shape = matrix.shape
+	transform_type, transform_dim =  method.split('_', maxsplit=1)
+	if transform_dim.lower() == '0d':
+		_shape = 1
+	elif '1d_dim' in transform_dim.lower():
+		_shape = (1, _shape[1])
+	elif '1d_num' in transform_dim.lower():
+		_shape = (_shape[0], 1)
+	else:
+		assert transform_dim.lower() == '2d'
+
+	if transform_type == 'affine':
+		return AffineTransform(_shape, **kwargs)
+	else:
+		assert transform_type == 'norm'
+		assert transform_dim != '0d'
+		return torch.nn.LayerNorm(_shape, **kwargs)
+
+
+class AffineTransform(nn.Module):
+
+	def __init__(self, shape, init_scale=1.0):
+		super().__init__()
+		self.shape = shape
+		self.init_scale = init_scale
+		self.weight = torch.nn.Parameter(torch.ones(shape) * init_scale)
+		self.bias = torch.nn.Parameter(torch.zeros(shape))
+	
+	def forward(self, inputs):
+		return self.weight * inputs + self.bias
+
+	def extra_repr(self):
+		return 'shape={shape}, init_scale={init_scale}'.format(**self.__dict__)
+
+
 class SequenceTagger(flair.nn.Model):
 	def __init__(
 		self,
@@ -236,6 +272,8 @@ class SequenceTagger(flair.nn.Model):
 		factor_for_last_cls: bool = False,
 		mse_loss_on_last_cls_and_tag_embed: bool = False,
 		mse_loss_weight: float = 1.0,
+		scale_for_mse = None,
+		scale_params_for_mse = None,
 	):
 		"""
 		Initializes a SequenceTagger
@@ -472,6 +510,12 @@ class SequenceTagger(flair.nn.Model):
 				self.linear = torch.nn.Linear(
 					self.embeddings.embedding_length, len(tag_dictionary)
 				)
+		self.scale_for_mse = scale_for_mse
+		self.scale_params_for_mse = scale_params_for_mse
+
+		scale_params_for_mse = {} if scale_params_for_mse is None else scale_params_for_mse
+		if scale_for_mse is not None:
+			self.scale_layer_for_mse = get_transform(self.linear.weight, scale_for_mse, **scale_params_for_mse)
 
 		# ============ for other tasks ============
 		self.loss_weight = loss_weight  # for NER task
@@ -607,6 +651,8 @@ class SequenceTagger(flair.nn.Model):
 			"factor_for_last_cls": self.factor_for_last_cls,
 			"mse_loss_on_last_cls_and_tag_embed": self.mse_loss_on_last_cls_and_tag_embed,
 			"mse_loss_weight": self.mse_loss_weight,
+			"scale_for_mse": self.scale_for_mse,
+			"scale_params_for_mse": self.scale_params_for_mse,
 		}
 		return model_state
 
@@ -2061,6 +2107,9 @@ class FastSequenceTagger(SequenceTagger):
 			factor_for_last_cls = False if "factor_for_last_cls" not in state else state["factor_for_last_cls"],
 			mse_loss_on_last_cls_and_tag_embed = False if "mse_loss_on_last_cls_and_tag_embed" not in state else state["mse_loss_on_last_cls_and_tag_embed"],
 			mse_loss_weight = 1.0 if "mse_loss_weight" not in state else state["mse_loss_weight"],
+			scale_for_mse = None if "scale_for_mse" not in state else state["scale_for_mse"],
+			scale_params_for_mse = None if "scale_params_for_mse" not in state else state["scale_params_for_mse"],
+
 		)
 		model.load_state_dict(state["state_dict"])
 		return model
@@ -2084,8 +2133,12 @@ class FastSequenceTagger(SequenceTagger):
 			tag_embed = _get_tag_embed(self.embeddings).weight
 			special_indices = _get_speical_indices(self)
 			w = tag_embed[[i for i in range(len(tag_embed)) if i not in special_indices]]
+			if self.scale_for_mse is not None:
+				w = self.scale_layer_for_mse(w)
 			assert self.linear.weight.shape == w.shape
-			loss += self.mse_loss_weight * torch.nn.functional.mse_loss(self.linear.weight, w)
+
+			w2 = self.linear.weight
+			loss += self.mse_loss_weight * torch.nn.functional.mse_loss(w2, w)
 
 		# === other tasks by cwhsu ===
 		for task_params in self.other_tasks:
