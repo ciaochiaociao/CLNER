@@ -425,6 +425,9 @@ class ModelFinetuner(ModelDistiller):
 		freezing: bool = False,
 		save_finetuned_embedding: bool = False,
 		multi_view_rate: float = 0.5,
+		
+		# cwhsu
+		discard_only_local: bool = False,
 		**kwargs,
 	) -> dict:
 
@@ -634,7 +637,7 @@ class ModelFinetuner(ModelDistiller):
 			del self.teachers
 			batch_loader=ColumnDataLoader(train_data,mini_batch_size,shuffle,use_bert=self.use_bert,tokenizer=self.bert_tokenizer, sort_data=sort_data, model = self.model, sentence_level_batch = self.sentence_level_batch)
 		else:
-			batch_loader=ColumnDataLoader(ConcatDataset(train_data),mini_batch_size,shuffle,use_bert=self.use_bert,tokenizer=self.bert_tokenizer, sort_data=sort_data, model = self.model, sentence_level_batch = self.sentence_level_batch)
+			batch_loader=ColumnDataLoader(ConcatDataset(train_data),mini_batch_size,shuffle,use_bert=self.use_bert,tokenizer=self.bert_tokenizer, sort_data=sort_data, model = self.model, sentence_level_batch = self.sentence_level_batch, discard_only_local=discard_only_local)
 		batch_loader.assign_tags(self.model.tag_type,self.model.tag_dictionary)
 		if self.distill_mode:
 			batch_loader=self.resort(batch_loader,is_crf=self.model.distill_crf, is_posterior = self.model.distill_posterior or self.model.distill_exact, is_token_att = self.model.token_level_attention)
@@ -1122,12 +1125,14 @@ class ModelFinetuner(ModelDistiller):
 										log.info(_other_result.log_line)
 										log.info(_other_result.detailed_results)
 										log_line(log)
-								
+								current_result, current_result2 = current_result
 								result_dict[self.corpus.targets[index]]=current_result.main_score*100
 								print_sent+=self.corpus.targets[index]+'\t'+f'{result_dict[self.corpus.targets[index]]:.2f}'+'\t'
 								loss_list.append(dev_loss)
 								log.info(current_result.log_line)
 								log.info(current_result.detailed_results)
+								log.info(current_result2.log_line)
+								log.info(current_result2.detailed_results)
 						else:
 							assert 0, 'not defined!'
 						mavg=sum(result_dict.values())/len(result_dict)
@@ -2175,6 +2180,7 @@ class ModelFinetuner(ModelDistiller):
 						log.info(_other_result.log_line)
 						log.info(_other_result.detailed_results)
 						log_line(log)
+				test_results, test_results2 = test_results
 
 				log_line(log)
 				log.info('=== NER ===')
@@ -2183,6 +2189,12 @@ class ModelFinetuner(ModelDistiller):
 				log.info(test_results.detailed_results)
 				log_line(log)
 
+				log_line(log)
+				log.info('=== NER (keep original if no nonlocals) ===')
+				test_results2: Result = test_results2
+				log.info(test_results2.log_line)
+				log.info(test_results2.detailed_results)
+				log_line(log)
 
 				# if self.model.embedding_selector:
 				#   print(sorted(loader[0].features.keys()))
@@ -2260,8 +2272,11 @@ class ModelFinetuner(ModelDistiller):
 						log.info(_other_result.log_line)
 						log.info(_other_result.detailed_results)
 						log_line(log)
+				current_result, current_result2 = current_result
 				log.info(current_result.log_line)
 				log.info(current_result.detailed_results)
+				log.info(current_result2.log_line)
+				log.info(current_result2.detailed_results)
 				if quiet_mode:
 					if keep_embedding>-1:
 						embedding_name = sorted(loader[0].features.keys())[keep_embedding].split()
@@ -2343,7 +2358,7 @@ class ModelFinetuner(ModelDistiller):
 				batch_loader.true_reshuffle()
 				step += 1
 
-				# forward pass
+				# forward passcur
 				loss = self.model.forward_loss(batch)
 
 				# update optimizer and scheduler

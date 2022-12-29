@@ -2025,6 +2025,58 @@ class SequenceTagger(flair.nn.Model):
 		return path_score, decode_idx
 
 
+def add_to_metric(batch, metric, remove_x, gold_tag_type, predict_tag_type, keep_orig_if_no_nonlocals=False, orig_tag_type=None):
+	for sentence in batch:
+		# make list of gold tags
+		gold_tags = [
+			(tag.tag, str(tag)) for tag in sentence.get_spans(gold_tag_type)
+		]
+		# make list of predicted tags
+		_predict_tag_type = predict_tag_type
+		if keep_orig_if_no_nonlocals:
+			assert orig_tag_type is not None
+			if not sentence.has_nonlocals:
+				_predict_tag_type = orig_tag_type
+		predicted_tags = [
+			(tag.tag, str(tag)) for tag in sentence.get_spans(_predict_tag_type)
+		]
+		
+		if remove_x:
+			
+
+			# gold_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans(gold_tag_type)]
+			predicted_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans(_predict_tag_type)]
+			new_predicted_tags = []
+			for tag_idx, tags in enumerate(predicted_tags):
+				flag = 0
+				# stride=ast.literal_eval(re.match('.*\-span (\[.*\])\:.*',tags[1]).group(1))
+				stride = predicted_tags_info[tag_idx]
+				for val in stride:
+					if sentence[val-1].get_tag(gold_tag_type).value == 'S-X':
+						flag = 1
+						break
+				if not flag:
+					# new_gold_tags.append(tags)
+					new_predicted_tags.append(tags)
+			predicted_tags = new_predicted_tags
+			new_gold_tags = [x for x in gold_tags if x[0] != 'X']
+			gold_tags = new_gold_tags
+
+		# check for true positives, false positives and false negatives
+		for tag, prediction in predicted_tags:
+
+			if (tag, prediction) in gold_tags:
+				metric.add_tp(tag)
+			else:
+				metric.add_fp(tag)
+
+		for tag, gold in gold_tags:
+			if (tag, gold) not in predicted_tags:
+				metric.add_fn(tag)
+			else:
+				metric.add_tn(tag)
+	return metric
+
 
 class FastSequenceTagger(SequenceTagger):
 	def _init_model_with_state_dict(state, testing = False):
@@ -3134,7 +3186,7 @@ class FastSequenceTagger(SequenceTagger):
 			batch_no: int = 0
 
 			metric = Metric("Evaluation")
-
+			metric2 = Metric("Keep Original Predictions If No Nonlocals")
 			
 			# === other tasks by cwhsu ===
 			if len(self.other_tasks):
@@ -3194,49 +3246,8 @@ class FastSequenceTagger(SequenceTagger):
 						# lines.append("\n")
 						if out_path is not None:
 							outfile.write("\n")
-					for sentence in batch:
-						# make list of gold tags
-						gold_tags = [
-							(tag.tag, str(tag)) for tag in sentence.get_spans(self.tag_type)
-						]
-						# make list of predicted tags
-						predicted_tags = [
-							(tag.tag, str(tag)) for tag in sentence.get_spans("predicted")
-						]
-						if self.remove_x:
-							
-
-							# gold_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans(self.tag_type)]
-							predicted_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans("predicted")]
-							new_predicted_tags = []
-							for tag_idx, tags in enumerate(predicted_tags):
-								flag = 0
-								# stride=ast.literal_eval(re.match('.*\-span (\[.*\])\:.*',tags[1]).group(1))
-								stride = predicted_tags_info[tag_idx]
-								for val in stride:
-									if sentence[val-1].get_tag(self.tag_type).value == 'S-X':
-										flag = 1
-										break
-								if not flag:
-									# new_gold_tags.append(tags)
-									new_predicted_tags.append(tags)
-							predicted_tags = new_predicted_tags
-							new_gold_tags = [x for x in gold_tags if x[0] != 'X']
-							gold_tags = new_gold_tags
-
-						# check for true positives, false positives and false negatives
-						for tag, prediction in predicted_tags:
-
-							if (tag, prediction) in gold_tags:
-								metric.add_tp(tag)
-							else:
-								metric.add_fp(tag)
-
-						for tag, gold in gold_tags:
-							if (tag, gold) not in predicted_tags:
-								metric.add_fn(tag)
-							else:
-								metric.add_tn(tag)
+					add_to_metric(batch, metric, self.remove_x, self.tag_type, "predicted")
+					add_to_metric(batch, metric2, self.remove_x, self.tag_type, "predicted", keep_orig_if_no_nonlocals=True, orig_tag_type="predict")
 
 						# pdb.set_trace()
 					if len(data_loader)<10:
@@ -3260,6 +3271,7 @@ class FastSequenceTagger(SequenceTagger):
 			#       outfile.write("".join(lines))
 
 			result = self._get_result_from_metric(metric)  # refactored by cwhsu
+			result2 = self._get_result_from_metric(metric2)
 			
 			# === other tasks by cwhsu ===
 			_other_results = []
@@ -3269,10 +3281,10 @@ class FastSequenceTagger(SequenceTagger):
 				_other_results.append(self._get_result_from_metric(metric))
 
 			if len(self.other_tasks):
-				return (result, _other_results), eval_loss
+				return ((result, result2), _other_results), eval_loss
 			# === other tasks by cwhsu ===
 
-			return result, eval_loss
+			return (result, result2), eval_loss
 
 	def _get_result_from_metric(self, metric):
 		detailed_result = (

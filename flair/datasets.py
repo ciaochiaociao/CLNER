@@ -854,6 +854,16 @@ class SentenceDataset(FlairDataset):
         return self.sentences[index]
 
 
+def _has_nonlocals(sentence, eos_symbol):
+    eos = None
+    for i, token in enumerate(sentence):
+        if token.text == eos_symbol:
+            eos = i
+            break
+
+    return eos is not None and len(sentence.tokens[eos+1:]) >= 5
+
+
 class ColumnDataset(FlairDataset):
     def __init__(
         self,
@@ -866,6 +876,7 @@ class ColumnDataset(FlairDataset):
         # cwhsu
         comment_line_format: Dict[str, dict] = None,
         scope_token_map: Dict[str, str] = None,
+        discard_only_local = False,
     ):
         """
         Instantiates a column dataset (typically used for sequence labeling or word-level prediction).
@@ -876,6 +887,7 @@ class ColumnDataset(FlairDataset):
         :param comment_symbol: if set, lines that begin with this symbol are treated as comments
         :param in_memory: If set to True, the dataset is kept in memory as Sentence objects, otherwise does disk reads
         """
+
         # import pdb; pdb.set_trace()
         assert path_to_column_file.exists()
         self.path_to_column_file = path_to_column_file
@@ -1007,17 +1019,19 @@ class ColumnDataset(FlairDataset):
                 
                 if line.isspace():
                     if len(sentence) > 0:
-                        sentence.infer_space_after()
-                        if self.in_memory:
-                            if self.tag_to_bioes is not None:
-                                sentence.convert_tag_scheme(
-                                    tag_type=self.tag_to_bioes, target_scheme="iobes"
-                                )
-                            self.sentences.append(sentence)
-                        else:
-                            self.indices.append(position)
-                            position = f.tell()
-                        self.total_sentence_count += 1
+                        sentence.has_nonlocals = _has_nonlocals(sentence, scope_token_map['local_eos'])
+                        if not discard_only_local or sentence.has_nonlocals:
+                            sentence.infer_space_after()
+                            if self.in_memory:
+                                if self.tag_to_bioes is not None:
+                                    sentence.convert_tag_scheme(
+                                        tag_type=self.tag_to_bioes, target_scheme="iobes"
+                                    )
+                                self.sentences.append(sentence)
+                            else:
+                                self.indices.append(position)
+                                position = f.tell()
+                            self.total_sentence_count += 1
 
                     sentence: Sentence = Sentence()
                     _add_labels_to_token = False  # for labeling tokens by cwhsu
@@ -1049,23 +1063,24 @@ class ColumnDataset(FlairDataset):
 
                 line = f.readline()
 
-
         if len(sentence.tokens) > 0:
-            sentence.infer_space_after()
-            if self.in_memory:
-                if self.tag_to_bioes is not None:
-                    sentence.convert_tag_scheme(
-                        tag_type=self.tag_to_bioes, target_scheme="iobes"
-                    )
-                self.sentences.append(sentence)
-            else:
-                self.indices.append(position)
-            self.total_sentence_count += 1
+            sentence.has_nonlocals = _has_nonlocals(sentence, scope_token_map['local_eos'])
+            if not discard_only_local or sentence.has_nonlocals:
+                sentence.infer_space_after()
+                if self.in_memory:
+                    if self.tag_to_bioes is not None:
+                        sentence.convert_tag_scheme(
+                            tag_type=self.tag_to_bioes, target_scheme="iobes"
+                        )
+                    self.sentences.append(sentence)
+                else:
+                    self.indices.append(position)
+                self.total_sentence_count += 1
 
         print_once = True
         # set local and nonlocal scope by cwhsu
         for sentence in self.sentences:
-            
+            assert hasattr(sentence, 'has_nonlocals')
             _out_of_local = False
             for token in sentence:
                 if not _out_of_local:

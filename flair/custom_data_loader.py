@@ -25,7 +25,11 @@ class BatchedData(list):
 class ColumnDataLoader:
 	## adopt from stanfordnlp, modfied by Xinyu Wang for flair's ColumnDataset
 	## link: https://github.com/stanfordnlp/stanfordnlp/tree/d8061501ff14c73734e834a08fa33c58c4a6d917
-	def __init__(self, data, batch_size, shuffle=False, args=None,grouped_data=False,use_bert=False, tokenizer=None, sort_data = True, sentence_level_batch = False, model = None):
+	def __init__(self, data, batch_size, shuffle=False, args=None,grouped_data=False,use_bert=False, tokenizer=None, sort_data = True, sentence_level_batch = False, model = None, discard_only_local=False):
+		
+		if discard_only_local:
+			data = [s for s in data if s.has_nonlocals]
+		
 		self.batch_size = batch_size
 		self.args = args
 		self.shuffled=shuffle
