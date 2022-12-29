@@ -3181,9 +3181,10 @@ class FastSequenceTagger(SequenceTagger):
 							token.add_tag_label("predicted", tag)
 
 							# append both to file for evaluation
-							eval_line = "{} {} {} {}\n".format(
+							eval_line = "{} {} {} {} {}\n".format(
 								token.text,
 								token.get_tag(self.tag_type).value,
+								token.get_tag('predict').value,
 								tag.value,
 								tag.score,
 							)

@@ -1,3 +1,4 @@
+from time import ctime, time
 from typing import List
 import flair
 from flair.data import Dictionary, Sentence, Token, Label
@@ -23,7 +24,7 @@ import sys
 import os, shutil
 import logging
 from flair.custom_data_loader import ColumnDataLoader
-from flair.datasets import DataLoader
+from flair.datasets import ColumnDataset, DataLoader
 from process import wait_for_process
 # Disable
 def blockPrint():
@@ -61,7 +62,9 @@ parser.add_argument('--keep_embedding', default=-1, help='mask out all embedding
 parser.add_argument('--toy_test', action='store_true')
 parser.add_argument('--pid_to_wait', type=int)
 parser.add_argument('--force', action='store_true')
-
+parser.add_argument('--inference', action='store_true')
+parser.add_argument('--inference_verbose', '-v', action='store_true')
+parser.add_argument('--interactive', '-i', action='store_true')
 
 
 def count_parameters(model):
@@ -85,7 +88,7 @@ if args.quiet:
 config = Params.from_file(args.config)
 
 if args.test:
-	log_handler = add_file_handler(log, config.get_target_path / "testing.log")
+	log_handler = add_file_handler(log, Path(config['target_dir'] + "/" + config['model_name'] + "/testing.log"))
 
 if args.test and args.zeroshot:
 	temperory_reject_list=['ast','enhancedud','dependency','atis','chunk']
@@ -95,7 +98,7 @@ if args.test and args.zeroshot:
 		exit()
 
 # pdb.set_trace()
-config = ConfigParser(config,all=args.all,zero_shot=args.zeroshot,other_shot=args.other,predict=args.predict)
+config = ConfigParser(config,all=args.all,zero_shot=args.zeroshot,other_shot=args.other,predict=args.predict,inference=args.inference)
 os.makedirs(config.get_target_path, exist_ok=args.force)
 shutil.copy(args.config, config.get_target_path)
 # pdb.set_trace()
@@ -172,7 +175,76 @@ if args.test_speed:
 	train_eval_result, train_loss = student.evaluate(test_loader,embeddings_storage_mode='none',speed_test=True)
 	# print('Current accuracy: ' + str(train_eval_result.main_score*100))
 	# print(train_eval_result.detailed_results)
-	
+
+elif args.inference:
+	from flair.custom_data_loader import ColumnDataLoader
+	import torch
+	student = student.load(config.get_target_path / "best-model.pt")
+	student.eval()
+	__corpus = corpus
+	infer_cache_path = config.get_target_path / 'inference' / 'cache.log'
+
+	infer_cache_fh = add_file_handler(log, infer_cache_path, mode='a')
+	while True:
+		try:
+			__dataset = __corpus.test
+			loader=ColumnDataLoader(list(__dataset), 2, use_bert=True, model = student, sentence_level_batch = True)
+			loader.assign_tags(student.tag_type, student.tag_dictionary)
+			with torch.no_grad():
+				trainer.gpu_friendly_assign_embedding([loader])
+			out_path = config.get_target_path / "inference" / "output.tsv"
+			test_results, test_loss = student.evaluate(
+				loader,
+				out_path=out_path,
+				embeddings_storage_mode="cpu",
+			)
+			if args.inference_verbose:
+				for sent in __dataset:
+					sent : Sentence = sent
+					log.info('datetime:' + str(ctime(time())))
+					log.info('command:' + repr(sys.argv))
+
+					log.info('== original ==')
+					log.info(sent.to_tagged_string('predict'))
+					log.info('== recovered ==')
+					log.info(sent.to_tagged_string('predicted'))
+				
+				log.info('== token-by-token ==')
+				with open(out_path) as f:
+					lines = f.read()
+					log.info('\n' + lines)
+
+			log.info('== evaluation ==')
+			log.info(test_results.log_line)
+			log.info(test_results.detailed_results)
+
+			if not args.interactive:
+				break
+			
+			# interactive modes
+			_embed = True
+			_cont = True
+			while _embed:
+				res = input(f"Continue (c) / Interactive Shell (i) / pdb (d) ? (Input New Data in '{config.get_target_path / 'inference' / 'input.tsv'}') ")
+				if res[0].lower() == 'i':
+					import IPython
+					IPython.embed()
+				elif res[0].lower() == 'd':
+					pdb.set_trace()
+				else:
+					_embed = False
+					if res[0].lower() != 'c':
+						_cont = False
+					break  # exit embed mode
+			if not _cont:
+				break  # exit interactive inference mode
+
+			__corpus = config.get_inference_corpus
+		except Exception as e:
+			print(repr(e))
+			if input(f"An error occurred as shown above !! Continue ? (y/n) ") != 'y':
+				raise e
+	log.removeHandler(infer_cache_fh)
 
 elif args.test:
 	# import pdb; pdb.set_trace()

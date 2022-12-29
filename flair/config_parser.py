@@ -1,3 +1,4 @@
+import shutil
 from typing import List
 
 #from flair.datasets import CONLL_03, CONLL_03_DUTCH, CONLL_03_SPANISH, CONLL_03_GERMAN
@@ -8,9 +9,9 @@ from . import embeddings as Embeddings
 from .training_utils import EvaluationMetric
 import torch
 from torch.utils.data.dataset import ConcatDataset
-from flair.datasets import CoupleDataset
+from .datasets import CoupleDataset
 from .custom_data_loader import ColumnDataLoader
-from flair.training_utils import store_embeddings
+from .training_utils import store_embeddings
 # initialize sequence tagger
 from . import models as models
 from pathlib import Path
@@ -25,7 +26,7 @@ log = logging.getLogger("flair")
 from flair.corpus_mapping import corpus_map,reverse_corpus_map
 dependency_tasks={'enhancedud', 'dependency', 'srl', 'ner_dp'}
 class ConfigParser:
-	def __init__(self, config, all=False, zero_shot=False, other_shot=False, predict=False):
+	def __init__(self, config, all=False, zero_shot=False, other_shot=False, predict=False, inference=False):
 		self.full_corpus={'ner':'CONLL_03_GERMAN:CONLL_03:CONLL_03_DUTCH:CONLL_03_SPANISH', 'upos':'UD_GERMAN:UD_ENGLISH:UD_FRENCH:UD_ITALIAN:UD_DUTCH:UD_SPANISH:UD_PORTUGUESE:UD_CHINESE'}
 		# self.zeroshot_corpus={'ner':'PANX-TA:PANX-SL:PANX-PT:PANX-ID:PANX-HE:PANX-FR:PANX-FA:PANX-EU', 'upos':'UD_BASQUE:UD_DUTCH:UD_ARABIC:UD_RUSSIAN:UD_KOREAN:UD_CHINESE:UD_HINDI:UD_FINNISH'}
 		self.zeroshot_corpus={}
@@ -58,6 +59,8 @@ class ConfigParser:
 			self.corpus: ListCorpus=self.get_othershot_corpus
 		elif predict:
 			self.corpus: ListCorpus=self.get_predict_corpus
+		elif inference:
+			self.corpus = self.get_inference_corpus
 		else:
 			self.corpus: ListCorpus=self.get_corpus
 		if 'trainer' in self.config and self.config['trainer'] == 'SWAFTrainer':
@@ -485,6 +488,38 @@ class ConfigParser:
 		corpus_list['targets'] = [corpus+'-'+lang]
 		corpus: ListCorpus = ListCorpus(**corpus_list)
 		return corpus
+	@property
+	def get_inference_corpus(self):
+		_datasets = self.get_inference_datasets
+		corpus_list={'train': _datasets,'dev': _datasets,'test': _datasets}  # assign the same set of train, dev by test set as a workaround to be compatible to the code
+		corpus_list['targets'] = self.config[self.target]['Corpus'].split(':')
+		corpus: ListCorpus = ListCorpus(**corpus_list)
+		return corpus
+		
+	@property
+	def get_inference_datasets(self, default_file_path='/home/cwhsu/.flair/inference@with_dis_score/test.txt'):
+
+		inference_fpath: Path = self.get_target_path / 'inference' / 'input.tsv'
+		if not inference_fpath.exists():
+			inference_fpath.parent.mkdir(exist_ok=True)
+			shutil.copy2(default_file_path, inference_fpath)
+
+		_datasets = []
+		
+		for _dataset in self.config[self.target]['Corpus'].split(':'):
+			dataset_params = copy.deepcopy(self.config[self.target][_dataset])
+			dataset_params.pop('data_folder')
+			dataset_params['path_to_column_file'] = inference_fpath
+			dataset_params['column_name_map'] = dataset_params['column_format']
+			dataset_params.pop('column_format')
+			if '-' in _dataset:
+				dataset_name, idx = _dataset.split('-')
+			else:
+				dataset_name = _dataset
+			dataset_name = dataset_name.replace('Corpus', 'Dataset')
+			current_dataset = getattr(datasets, dataset_name)(**dataset_params)
+			_datasets.append(current_dataset)
+		return _datasets
 	@property
 	def get_unlabeled_corpus(self):
 		corpus_list={'train':[],'dev':[],'test':[],'targets':[]}

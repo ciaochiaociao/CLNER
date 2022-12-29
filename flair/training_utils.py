@@ -299,7 +299,7 @@ class WeightExtractor(object):
         self.weights_dict[key] = indices
 
 
-def init_output_file(base_path: Path, file_name: str) -> Path:
+def init_output_file(base_path: Path, file_name: str, mode='w') -> Path:
     """
     Creates a local file.
     :param base_path: the path to the directory
@@ -309,7 +309,7 @@ def init_output_file(base_path: Path, file_name: str) -> Path:
     base_path.mkdir(parents=True, exist_ok=True)
 
     file = base_path / file_name
-    open(file, "w", encoding="utf-8").close()
+    open(file, mode, encoding="utf-8").close()
     return file
 
 
@@ -332,9 +332,9 @@ def log_line(log):
     log.info("-" * 100)
 
 
-def add_file_handler(log, output_file):
-    init_output_file(output_file.parents[0], output_file.name)
-    fh = logging.FileHandler(output_file, mode='w', encoding='utf-8')
+def add_file_handler(log, output_file, mode='w'):
+    init_output_file(output_file.parents[0], output_file.name, mode)
+    fh = logging.FileHandler(output_file, mode=mode, encoding='utf-8')
     fh.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)-15s %(message)s")
     fh.setFormatter(formatter)
