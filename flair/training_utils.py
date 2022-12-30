@@ -14,12 +14,13 @@ import pdb
 
 class Result(object):
     def __init__(
-        self, main_score: float, log_header: str, log_line: str, detailed_results: str
+        self, main_score: float, log_header: str, log_line: str, detailed_results: str, name: str = None,
     ):
         self.main_score: float = main_score
         self.log_header: str = log_header
         self.log_line: str = log_line
         self.detailed_results: str = detailed_results
+        self.name = name
 
 
 class Metric(object):

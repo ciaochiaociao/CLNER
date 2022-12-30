@@ -1110,14 +1110,14 @@ class ModelFinetuner(ModelDistiller):
 								# log.info('current corpus: '+self.corpus.targets[index])
 								if len(loader) == 0:
 									continue
-								current_result, dev_loss = self.model.evaluate(
+								all_current_results, dev_loss = self.model.evaluate(
 									loader,
 									embeddings_storage_mode=embeddings_storage_mode,
 								)
 								
 								# for other tasks by cwhsu
 								if self.model.other_tasks:
-									current_result, _other_results = current_result
+									all_current_results, _other_results = all_current_results
 									
 									for i, _other_result in enumerate(_other_results):
 										log_line(log)
@@ -1125,14 +1125,16 @@ class ModelFinetuner(ModelDistiller):
 										log.info(_other_result.log_line)
 										log.info(_other_result.detailed_results)
 										log_line(log)
-								current_result, current_result2 = current_result
+
+								for res in all_current_results:
+									log.info(f"=== {res.name} ===")
+									log.info(res.log_line)
+									log.info(res.detailed_results)
+								
+								current_result, *current_other_results = all_current_results
 								result_dict[self.corpus.targets[index]]=current_result.main_score*100
 								print_sent+=self.corpus.targets[index]+'\t'+f'{result_dict[self.corpus.targets[index]]:.2f}'+'\t'
 								loss_list.append(dev_loss)
-								log.info(current_result.log_line)
-								log.info(current_result.detailed_results)
-								log.info(current_result2.log_line)
-								log.info(current_result2.detailed_results)
 						else:
 							assert 0, 'not defined!'
 						mavg=sum(result_dict.values())/len(result_dict)
@@ -2166,13 +2168,13 @@ class ModelFinetuner(ModelDistiller):
 					self.gpu_friendly_assign_embedding([loader])
 				for x in sorted(loader[0].features.keys()):
 					print(x)
-				test_results, test_loss = self.model.evaluate(
+				all_current_results, test_loss = self.model.evaluate(
 					loader,
 					out_path=base_path / f"{subset}.tsv",
 					embeddings_storage_mode="cpu",
 				)
 				if self.model.other_tasks:
-					test_results, _other_results = test_results
+					all_current_results, _other_results = all_current_results
 					
 					for i, _other_result in enumerate(_other_results):
 						log_line(log)
@@ -2180,21 +2182,15 @@ class ModelFinetuner(ModelDistiller):
 						log.info(_other_result.log_line)
 						log.info(_other_result.detailed_results)
 						log_line(log)
-				test_results, test_results2 = test_results
 
-				log_line(log)
-				log.info('=== NER ===')
-				test_results: Result = test_results
-				log.info(test_results.log_line)
-				log.info(test_results.detailed_results)
-				log_line(log)
+				for res in all_current_results:
+					log_line(log)
+					log.info(f'=== {res.name} ===')
+					log.info(res.log_line)
+					log.info(res.detailed_results)
+					log_line(log)
 
-				log_line(log)
-				log.info('=== NER (keep original if no nonlocals) ===')
-				test_results2: Result = test_results2
-				log.info(test_results2.log_line)
-				log.info(test_results2.detailed_results)
-				log_line(log)
+				test_results, *current_other_results = all_current_results
 
 				# if self.model.embedding_selector:
 				#   print(sorted(loader[0].features.keys()))
@@ -2258,13 +2254,13 @@ class ModelFinetuner(ModelDistiller):
 				loader.assign_tags(self.model.tag_type,self.model.tag_dictionary)
 				with torch.no_grad():
 					self.gpu_friendly_assign_embedding([loader])
-				current_result, test_loss = self.model.evaluate(
+				all_current_results, test_loss = self.model.evaluate(
 					loader,
 					out_path=base_path / f"{self.corpus.targets[index]}-test.tsv",
 					embeddings_storage_mode="none",
 				)
 				if self.model.other_tasks:
-					current_result, _other_results = current_result
+					all_current_results, _other_results = all_current_results
 					
 					for i, _other_result in enumerate(_other_results):
 						log_line(log)
@@ -2272,11 +2268,11 @@ class ModelFinetuner(ModelDistiller):
 						log.info(_other_result.log_line)
 						log.info(_other_result.detailed_results)
 						log_line(log)
-				current_result, current_result2 = current_result
-				log.info(current_result.log_line)
-				log.info(current_result.detailed_results)
-				log.info(current_result2.log_line)
-				log.info(current_result2.detailed_results)
+				for res in all_current_results:
+					log.info(f"=== {res.name} ===")
+					log.info(res.log_line)
+					log.info(res.detailed_results)
+				current_result, *current_other_results = all_current_results
 				if quiet_mode:
 					if keep_embedding>-1:
 						embedding_name = sorted(loader[0].features.keys())[keep_embedding].split()

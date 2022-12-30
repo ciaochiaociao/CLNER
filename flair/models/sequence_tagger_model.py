@@ -2025,8 +2025,17 @@ class SequenceTagger(flair.nn.Model):
 		return path_score, decode_idx
 
 
-def add_to_metric(batch, metric, remove_x, gold_tag_type, predict_tag_type, keep_orig_if_no_nonlocals=False, orig_tag_type=None):
+def add_to_metric(batch, metric, remove_x, gold_tag_type, predict_tag_type, keep_orig_if_no_nonlocals=False, orig_tag_type=None, example_filter=None, surface_form=False):
 	for sentence in batch:
+		
+		if example_filter == 'only_ex_w_nonlocals' and not sentence.has_nonlocals:
+			continue
+		elif example_filter == 'only_ex_wo_nonlocals' and sentence.has_nonlocals:
+			continue
+		else:
+			if example_filter is not None:
+				raise ValueError(example_filter)
+
 		# make list of gold tags
 		gold_tags = [
 			(tag.tag, str(tag)) for tag in sentence.get_spans(gold_tag_type)
@@ -2063,10 +2072,11 @@ def add_to_metric(batch, metric, remove_x, gold_tag_type, predict_tag_type, keep
 			gold_tags = new_gold_tags
 
 		# check for true positives, false positives and false negatives
-		for tag, prediction in predicted_tags:
+		for tag_idx, (tag, prediction) in enumerate(predicted_tags):
 
 			if (tag, prediction) in gold_tags:
-				metric.add_tp(tag)
+				if not surface_form or sentence[tag_idx]:
+					metric.add_tp(tag)
 			else:
 				metric.add_fp(tag)
 
@@ -3187,6 +3197,8 @@ class FastSequenceTagger(SequenceTagger):
 
 			metric = Metric("Evaluation")
 			metric2 = Metric("Keep Original Predictions If No Nonlocals")
+			metric3 = Metric("Only Examples with Nonlocals")
+			metric4 = Metric("Only Examples with Locals")
 			
 			# === other tasks by cwhsu ===
 			if len(self.other_tasks):
@@ -3248,6 +3260,8 @@ class FastSequenceTagger(SequenceTagger):
 							outfile.write("\n")
 					add_to_metric(batch, metric, self.remove_x, self.tag_type, "predicted")
 					add_to_metric(batch, metric2, self.remove_x, self.tag_type, "predicted", keep_orig_if_no_nonlocals=True, orig_tag_type="predict")
+					add_to_metric(batch, metric3, self.remove_x, self.tag_type, "predicted", example_filter='only_ex_w_nonlocals')
+					add_to_metric(batch, metric4, self.remove_x, self.tag_type, "predicted", example_filter='only_ex_wo_nonlocals')
 
 						# pdb.set_trace()
 					if len(data_loader)<10:
@@ -3270,8 +3284,9 @@ class FastSequenceTagger(SequenceTagger):
 			#   with open(out_path, "w", encoding="utf-8") as outfile:
 			#       outfile.write("".join(lines))
 
-			result = self._get_result_from_metric(metric)  # refactored by cwhsu
-			result2 = self._get_result_from_metric(metric2)
+			all_current_results = []
+			for m in (metric, metric2, metric3, metric4):
+				all_current_results.append(self._get_result_from_metric(m))  # refactored by cwhsu
 			
 			# === other tasks by cwhsu ===
 			_other_results = []
@@ -3281,12 +3296,12 @@ class FastSequenceTagger(SequenceTagger):
 				_other_results.append(self._get_result_from_metric(metric))
 
 			if len(self.other_tasks):
-				return ((result, result2), _other_results), eval_loss
+				return (all_current_results, _other_results), eval_loss
 			# === other tasks by cwhsu ===
 
-			return (result, result2), eval_loss
+			return all_current_results, eval_loss
 
-	def _get_result_from_metric(self, metric):
+	def _get_result_from_metric(self, metric: Metric):
 		detailed_result = (
 						f"\nMICRO_AVG: acc {metric.micro_avg_accuracy()} - f1-score {metric.micro_avg_f_score()}"
 						f"\nMACRO_AVG: acc {metric.macro_avg_accuracy()} - f1-score {metric.macro_avg_f_score()}"
@@ -3305,6 +3320,7 @@ class FastSequenceTagger(SequenceTagger):
 						log_line=f"{metric.precision()}\t{metric.recall()}\t{metric.micro_avg_f_score()}",
 						log_header="PRECISION\tRECALL\tF1",
 						detailed_results=detailed_result,
+						name=metric.name,
 					)
 		
 		return result
