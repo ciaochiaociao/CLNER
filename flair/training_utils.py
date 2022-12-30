@@ -1,3 +1,4 @@
+from copy import deepcopy
 import itertools
 import random
 import logging
@@ -300,6 +301,28 @@ class WeightExtractor(object):
         self.weights_dict[key] = indices
 
 
+class Dejavuer:
+
+    def __init__(self, cache=None):
+        self.cache = set()
+        if cache is not None:
+            self.cache = cache
+
+    def dejavu(self, data):
+        text, *others = data
+        text = normalize(text)
+        data = (text, *others)
+        if data in self.cache:
+            return True
+        else:
+            self.cache.add(data)
+            return False
+
+
+def normalize(text):
+	return ''.join(e for e in text.lower() if e.isalnum())
+
+
 def init_output_file(base_path: Path, file_name: str, mode='w') -> Path:
     """
     Creates a local file.
@@ -373,3 +396,158 @@ def store_teacher_predictions(sentences: List[Sentence], storage_mode: str):
     if storage_mode == "cpu":
         for sentence in sentences:
             sentence.store_teacher_prediction(storage_mode)
+
+
+def get_all_metrics(batch, remove_x, tag_type, pred_tag_type, orig_tag_type="predict", use_surface_form=False, cache_for_dejavuer=None, suffix='') -> List[Metric]:
+
+    metrics = {
+        "ner": "NER",
+        "only_ex_w_nlc": "Only Examples with Nonlocals",
+        "only_ex_wo_nlc": "Only Examples with Locals",
+    }
+
+    _metric_params = {
+        "ner": {},
+        "only_ex_w_nlc": {"example_filter": "only_ex_w_nonlocals"},
+        "only_ex_wo_nlc": {"example_filter": "only_ex_wo_nonlocals"},
+    }
+
+    if orig_tag_type is not None:
+        metrics["keep_orig_if_no_nlc"] = "Keep Original Predictions If No Nonlocals"
+        _metric_params["keep_orig_if_no_nlc"] = {"keep_orig_if_no_nonlocals": True, "orig_tag_type": orig_tag_type}
+
+
+
+    if use_surface_form:
+        _new_metrics = {}
+        for name, desc in metrics.items():
+            _d = deepcopy(_metric_params[name])
+            _d.update({
+                    'surface_form': True, 
+                    'dejavuer': Dejavuer(cache_for_dejavuer),
+                })
+
+            new_name = name + suffix
+            _metric_params[new_name] = _d
+            _new_metrics[new_name] = desc + suffix
+        metrics.update(_new_metrics)
+    
+    for name in metrics.keys():
+        metrics[name] = Metric(metrics[name])
+
+    for name, metric in metrics.items():
+        add_to_metric(batch, metric, remove_x, tag_type, pred_tag_type, **_metric_params[name])
+    return metrics
+
+
+def add_to_metric(
+	batch,
+	metric,
+	remove_x,
+	gold_tag_type,
+	predict_tag_type,
+	keep_orig_if_no_nonlocals=False,
+	orig_tag_type=None,
+	example_filter=None,
+	surface_form=False,
+	dejavuer: Dejavuer = None,
+):
+    for sentence in batch:
+        
+        if example_filter == 'only_ex_w_nonlocals':
+            if not sentence.has_nonlocals:
+                continue
+        elif example_filter == 'only_ex_wo_nonlocals':
+            if sentence.has_nonlocals:
+                continue
+        else:
+            if example_filter is not None:
+                raise ValueError(example_filter)
+        
+        # FIXED: (cwhsu) there might be a rare situation of an unexpected bug in CLNER's original code that an NE will be correct if there is another NE in the sentence that matches the predicted one.
+        # solution: add position into the tuple
+        # make list of gold tags
+        gold_tags = [
+            (tag.tag, str(tag), tag.tokens[0].idx) for tag in sentence.get_spans(gold_tag_type)
+        ]
+        # make list of predicted tags
+        _predict_tag_type = predict_tag_type
+        if keep_orig_if_no_nonlocals:
+            assert orig_tag_type is not None
+            if not sentence.has_nonlocals:
+                _predict_tag_type = orig_tag_type
+        predicted_tags = [
+            (tag.tag, str(tag), tag.tokens[0].idx) for tag in sentence.get_spans(_predict_tag_type)
+        ]
+
+        if remove_x:
+
+            # gold_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans(gold_tag_type)]
+            predicted_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans(_predict_tag_type)]
+            new_predicted_tags = []
+            for tag_idx, tags in enumerate(predicted_tags):
+                flag = 0
+                # stride=ast.literal_eval(re.match('.*\-span (\[.*\])\:.*',tags[1]).group(1))
+                stride = predicted_tags_info[tag_idx]
+                for val in stride:
+                    if sentence[val-1].get_tag(gold_tag_type).value == 'S-X':
+                        flag = 1
+                        break
+                if not flag:
+                    # new_gold_tags.append(tags)
+                    new_predicted_tags.append(tags)
+            predicted_tags = new_predicted_tags
+            new_gold_tags = [x for x in gold_tags if x[0] != 'X']
+            gold_tags = new_gold_tags
+
+        # check for true positives, false positives and false negatives
+        for tag, prediction, pos in predicted_tags:
+            if surface_form and dejavuer.dejavu((tag, prediction)):
+                continue
+
+            if (tag, prediction, pos) in gold_tags:
+                metric.add_tp(tag)
+            else:
+                metric.add_fp(tag)
+
+        for tag, gold, pos in gold_tags:
+            if surface_form and dejavuer.dejavu((tag, gold)):
+                continue
+
+            if (tag, gold, pos) not in predicted_tags:
+                metric.add_fn(tag)
+    return metric
+
+
+def get_result_from_metric(metric: Metric):
+	detailed_result = (
+					f"\nMICRO_AVG: acc {metric.micro_avg_accuracy()} - f1-score {metric.micro_avg_f_score()}"
+					f"\nMACRO_AVG: acc {metric.macro_avg_accuracy()} - f1-score {metric.macro_avg_f_score()}"
+				)
+	for class_name in metric.get_classes():
+		detailed_result += (
+							f"\n{class_name:<10} tp: {metric.get_tp(class_name)} - fp: {metric.get_fp(class_name)} - "
+							f"fn: {metric.get_fn(class_name)} - precision: "
+							f"{metric.precision(class_name):.4f} - recall: {metric.recall(class_name):.4f} - "
+							f"accuracy: {metric.accuracy(class_name):.4f} - f1-score: "
+							f"{metric.f_score(class_name):.4f}"
+						)
+
+	result = Result(
+					main_score=metric.micro_avg_f_score(),
+					log_line=f"{metric.precision()}\t{metric.recall()}\t{metric.micro_avg_f_score()}",
+					log_header="PRECISION\tRECALL\tF1",
+					detailed_results=detailed_result,
+					name=metric.name,
+				)
+	
+	return result
+
+
+def log_result(log, result: Result, verbose=True):
+    log_line(log)
+    log.info(f"=== {result.name} ===")
+    log.info(result.log_line)
+    if verbose:
+        log.info(result.detailed_results)
+    log_line(log)

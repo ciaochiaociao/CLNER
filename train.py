@@ -7,7 +7,7 @@ import flair.datasets as datasets
 from flair.data import MultiCorpus, Corpus
 from flair.list_data import ListCorpus
 import flair.embeddings as Embeddings
-from flair.training_utils import EvaluationMetric, add_file_handler
+from flair.training_utils import EvaluationMetric, add_file_handler, get_all_metrics, get_result_from_metric, log_result
 from flair.visual.training_curves import Plotter
 # initialize sequence tagger
 from flair.models import SequenceTagger
@@ -59,12 +59,14 @@ parser.add_argument('--batch_size', default=-1, help='manually setting the mini 
 parser.add_argument('--keep_embedding', default=-1, help='mask out all embeddings except the index, for analysis')
 
 # by cwhsu
-parser.add_argument('--toy_test', action='store_true')
+parser.add_argument('--sample', action='store_true')
+parser.add_argument('--sample_ratio', type=float, default=0.1)
 parser.add_argument('--pid_to_wait', type=int)
 parser.add_argument('--force', action='store_true')
 parser.add_argument('--inference', action='store_true')
 parser.add_argument('--inference_verbose', '-v', action='store_true')
 parser.add_argument('--interactive', '-i', action='store_true')
+parser.add_argument('--only_eval', action='store_true')
 
 
 def count_parameters(model):
@@ -98,16 +100,13 @@ if args.test and args.zeroshot:
 		exit()
 
 # pdb.set_trace()
-config = ConfigParser(config,all=args.all,zero_shot=args.zeroshot,other_shot=args.other,predict=args.predict,inference=args.inference)
+config = ConfigParser(config,all=args.all,zero_shot=args.zeroshot,other_shot=args.other,predict=args.predict,inference=args.inference,load_corpus_from_target_path=args.only_eval)
 os.makedirs(config.get_target_path, exist_ok=args.force)
 shutil.copy(args.config, config.get_target_path)
 # pdb.set_trace()
 
 from pprint import pprint
 pprint(args)
-
-student=config.create_student(nocrf=args.nocrf)
-log.info(f"Model Size: {count_parameters(student)}")
 
 # import pdb; pdb.set_trace()
 # toy corpus for testing by cwhsu
@@ -116,6 +115,26 @@ log.info(f"Model Size: {count_parameters(student)}")
 
 corpus=config.corpus
 
+if args.sample:
+	log.info(f'Before sampling => {str(corpus)}')
+	corpus.downsample(args.sample_ratio)
+	log.info(f'After sampling with ratio {args.sample_ratio} => {str(corpus)}')
+
+if args.only_eval:
+	log_handler = add_file_handler(log, config.get_target_path / "eval.log")
+	for dataset in ('train', 'dev', 'test'):
+		log.info(f"===== {dataset} =====")
+		dataset = getattr(config.get_corpus, dataset)
+		for params in [{}, {'use_surface_form': True}]:
+			metrics = get_all_metrics(dataset, remove_x=True, tag_type=config.get_target, pred_tag_type='predicted', orig_tag_type="predict", **params)
+			results = [get_result_from_metric(metric) for metric in metrics.values()]
+			for result in results:
+				log_result(log, result)
+	log.removeHandler
+	exit()
+
+student=config.create_student(nocrf=args.nocrf)
+log.info(f"Model Size: {count_parameters(student)}")
 
 teacher_func=config.create_teachers
 if 'is_teacher_list' in config.config:
@@ -260,6 +279,7 @@ elif args.test:
 		# keep_embedding = int(args.keep_embedding),
 		predict_posterior=args.predict_posterior,
 		# sort_data = not args.keep_order,
+		out_pathspec=str(config.get_target_path / 'eval_{}.tsv'),
 	)
 	log.removeHandler(log_handler)
 elif args.parse or args.save_embedding:

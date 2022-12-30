@@ -860,7 +860,6 @@ class Corpus:
         return self._test
 
     def downsample(self, percentage: float = 0.1, only_downsample_train=False):
-
         self._train = self._downsample_to_proportion(self.train, percentage)
         if not only_downsample_train:
             self._dev = self._downsample_to_proportion(self.dev, percentage)

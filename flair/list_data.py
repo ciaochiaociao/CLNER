@@ -17,3 +17,15 @@ class ListCorpus(Corpus):
 		self._test: FlairDataset = ConcatDataset([data for data in test])
 		self.name: str = name
 		self.targets = targets
+
+	def downsample(self, percentage: float = 0.1, only_downsample_train=False):
+		for dataset_split in ('train', 'dev', 'test'):
+			dataset_list_name = dataset_split + '_list'
+			dataset_list = getattr(self, dataset_list_name)
+			if only_downsample_train:
+				if dataset_split != 'train':
+					continue
+			new_list = [self._downsample_to_proportion(dataset, percentage) for dataset in dataset_list]
+			setattr(self, dataset_list_name, new_list)
+			setattr(self, '_' + dataset_split, ConcatDataset([data for data in new_list]))
+		return self

@@ -16,7 +16,7 @@ from flair.file_utils import cached_path
 
 from typing import List, Tuple, Union
 
-from flair.training_utils import Metric, Result, convert_labels_to_one_hot, store_embeddings
+from flair.training_utils import Dejavuer, Metric, Result, add_to_metric, convert_labels_to_one_hot, get_all_metrics, get_result_from_metric, store_embeddings
 from .biaffine_attention import BiaffineAttention
 
 from tqdm import tqdm
@@ -781,8 +781,6 @@ class SequenceTagger(flair.nn.Model):
 					for tag, gold in gold_tags:
 						if (tag, gold) not in predicted_tags:
 							metric.add_fn(tag)
-						else:
-							metric.add_tn(tag)
 
 				store_embeddings(batch, embeddings_storage_mode)
 
@@ -799,7 +797,7 @@ class SequenceTagger(flair.nn.Model):
 			for class_name in metric.get_classes():
 				detailed_result += (
 					f"\n{class_name:<10} tp: {metric.get_tp(class_name)} - fp: {metric.get_fp(class_name)} - "
-					f"fn: {metric.get_fn(class_name)} - tn: {metric.get_tn(class_name)} - precision: "
+					f"fn: {metric.get_fn(class_name)} - precision: "
 					f"{metric.precision(class_name):.4f} - recall: {metric.recall(class_name):.4f} - "
 					f"accuracy: {metric.accuracy(class_name):.4f} - f1-score: "
 					f"{metric.f_score(class_name):.4f}"
@@ -2024,71 +2022,8 @@ class SequenceTagger(flair.nn.Model):
 		# exit(0)
 		return path_score, decode_idx
 
-
-def add_to_metric(batch, metric, remove_x, gold_tag_type, predict_tag_type, keep_orig_if_no_nonlocals=False, orig_tag_type=None, example_filter=None, surface_form=False):
-	for sentence in batch:
-		
-		if example_filter == 'only_ex_w_nonlocals' and not sentence.has_nonlocals:
-			continue
-		elif example_filter == 'only_ex_wo_nonlocals' and sentence.has_nonlocals:
-			continue
-		else:
-			if example_filter is not None:
-				raise ValueError(example_filter)
-
-		# make list of gold tags
-		gold_tags = [
-			(tag.tag, str(tag)) for tag in sentence.get_spans(gold_tag_type)
-		]
-		# make list of predicted tags
-		_predict_tag_type = predict_tag_type
-		if keep_orig_if_no_nonlocals:
-			assert orig_tag_type is not None
-			if not sentence.has_nonlocals:
-				_predict_tag_type = orig_tag_type
-		predicted_tags = [
-			(tag.tag, str(tag)) for tag in sentence.get_spans(_predict_tag_type)
-		]
-		
-		if remove_x:
-			
-
-			# gold_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans(gold_tag_type)]
-			predicted_tags_info = [[t.idx for t in tag.tokens] for tag in sentence.get_spans(_predict_tag_type)]
-			new_predicted_tags = []
-			for tag_idx, tags in enumerate(predicted_tags):
-				flag = 0
-				# stride=ast.literal_eval(re.match('.*\-span (\[.*\])\:.*',tags[1]).group(1))
-				stride = predicted_tags_info[tag_idx]
-				for val in stride:
-					if sentence[val-1].get_tag(gold_tag_type).value == 'S-X':
-						flag = 1
-						break
-				if not flag:
-					# new_gold_tags.append(tags)
-					new_predicted_tags.append(tags)
-			predicted_tags = new_predicted_tags
-			new_gold_tags = [x for x in gold_tags if x[0] != 'X']
-			gold_tags = new_gold_tags
-
-		# check for true positives, false positives and false negatives
-		for tag_idx, (tag, prediction) in enumerate(predicted_tags):
-
-			if (tag, prediction) in gold_tags:
-				if not surface_form or sentence[tag_idx]:
-					metric.add_tp(tag)
-			else:
-				metric.add_fp(tag)
-
-		for tag, gold in gold_tags:
-			if (tag, gold) not in predicted_tags:
-				metric.add_fn(tag)
-			else:
-				metric.add_tn(tag)
-	return metric
-
-
 class FastSequenceTagger(SequenceTagger):
+
 	def _init_model_with_state_dict(state, testing = False):
 		use_dropout = 0.0 if not "use_dropout" in state.keys() else state["use_dropout"]
 		use_word_dropout = (
@@ -3189,28 +3124,23 @@ class FastSequenceTagger(SequenceTagger):
 		embeddings_storage_mode: str = "cpu",
 		prediction_mode = False,
 		speed_test = False,
-	) -> (Result, float):
+
+		# cwhsu
+		add_surface_form = False,
+		eval_original = True,
+	):
 		with torch.no_grad():
 			eval_loss = 0
 
 			batch_no: int = 0
-
-			metric = Metric("Evaluation")
-			metric2 = Metric("Keep Original Predictions If No Nonlocals")
-			metric3 = Metric("Only Examples with Nonlocals")
-			metric4 = Metric("Only Examples with Locals")
-			
-			# === other tasks by cwhsu ===
-			if len(self.other_tasks):
-				metrics = {}
-				for task_params in self.other_tasks:
-					metrics[task_params['name']] = Metric(task_params['name'])
 
 			lines: List[str] = []
 			if out_path is not None:
 				outfile = open(out_path, "w", encoding="utf-8")
 			if speed_test:
 				start_time = time.time()
+			
+			other_labels = {task_params['name']: [] for task_params in self.other_tasks}
 			for batch in data_loader:
 				batch_no += 1
 
@@ -3231,14 +3161,13 @@ class FastSequenceTagger(SequenceTagger):
 					for task_params in self.other_tasks:
 						loss += task_params['loss_weight'] * self._calculate_task_loss(_other_feats, batch, task_params)
 						predicted_labels = self._obtain_task_labels(_other_feats[task_params['name']], task_params)
-
-						self._add_to_metric(batch, predicted_labels, task_params, metrics[task_params['name']], lines)
+						other_labels[task_params['name']].append(predicted_labels)
 					# === other tasks by cwhsu ===
 
 					tags, _ = self._obtain_labels(features, batch)
+
 				if not speed_test:
 					eval_loss += loss
-
 					for (sentence, sent_tags) in zip(batch, tags):
 						for (token, tag) in zip(sentence.tokens, sent_tags):
 							token: Token = token
@@ -3258,12 +3187,7 @@ class FastSequenceTagger(SequenceTagger):
 						# lines.append("\n")
 						if out_path is not None:
 							outfile.write("\n")
-					add_to_metric(batch, metric, self.remove_x, self.tag_type, "predicted")
-					add_to_metric(batch, metric2, self.remove_x, self.tag_type, "predicted", keep_orig_if_no_nonlocals=True, orig_tag_type="predict")
-					add_to_metric(batch, metric3, self.remove_x, self.tag_type, "predicted", example_filter='only_ex_w_nonlocals')
-					add_to_metric(batch, metric4, self.remove_x, self.tag_type, "predicted", example_filter='only_ex_wo_nonlocals')
 
-						# pdb.set_trace()
 					if len(data_loader)<10:
 						modulo = len(data_loader)
 					else:
@@ -3274,6 +3198,32 @@ class FastSequenceTagger(SequenceTagger):
 				if embeddings_storage_mode == "none" and hasattr(batch,'features'):
 					del batch.features
 					# print('>>>> delete batch features')
+
+			# get metrics
+
+			# === other tasks by cwhsu ===
+			if len(self.other_tasks):
+				other_metrics = {}
+				for task_params in self.other_tasks:
+					other_metrics[task_params['name']] = Metric(task_params['name'])
+
+			if not speed_test:
+				for batch in data_loader:
+					if len(self.other_tasks):
+						for task_params in self.other_tasks:
+							task = task_params['name']
+							self._add_to_metric(batch, other_labels[task], task_params, other_metrics[task], lines)
+
+				data = [example for batch in data_loader for example in batch]
+				metrics = get_all_metrics(data, self.remove_x, self.tag_type, "predicted")
+				if add_surface_form:
+					metrics.update(get_all_metrics(data, self.remove_x, self.tag_type, "predicted", use_surface_form=True, suffix=' (Surface Form)'))
+				
+				if eval_original:
+					metrics.update(get_all_metrics(data, self.remove_x, self.tag_type, "predict", use_surface_form=True, suffix=' [Original]'))
+					if add_surface_form:
+						metrics.update(get_all_metrics(data, self.remove_x, self.tag_type, "predict", use_surface_form=True, suffix=' [Original] (Surface Form)'))
+
 			if speed_test:
 				end_time = time.time()
 				print(data_loader.num_examples/(end_time-start_time))
@@ -3284,46 +3234,22 @@ class FastSequenceTagger(SequenceTagger):
 			#   with open(out_path, "w", encoding="utf-8") as outfile:
 			#       outfile.write("".join(lines))
 
-			all_current_results = []
-			for m in (metric, metric2, metric3, metric4):
-				all_current_results.append(self._get_result_from_metric(m))  # refactored by cwhsu
+			all_current_results = {}
+			for name, m in metrics.items():
+				all_current_results[name] = get_result_from_metric(m)  # refactored by cwhsu
 			
 			# === other tasks by cwhsu ===
 			_other_results = []
 			for task_params in self.other_tasks:
 				name = task_params['name']
 				metric = metrics[name]
-				_other_results.append(self._get_result_from_metric(metric))
+				_other_results.append(get_result_from_metric(metric))
 
 			if len(self.other_tasks):
 				return (all_current_results, _other_results), eval_loss
 			# === other tasks by cwhsu ===
 
 			return all_current_results, eval_loss
-
-	def _get_result_from_metric(self, metric: Metric):
-		detailed_result = (
-						f"\nMICRO_AVG: acc {metric.micro_avg_accuracy()} - f1-score {metric.micro_avg_f_score()}"
-						f"\nMACRO_AVG: acc {metric.macro_avg_accuracy()} - f1-score {metric.macro_avg_f_score()}"
-					)
-		for class_name in metric.get_classes():
-			detailed_result += (
-								f"\n{class_name:<10} tp: {metric.get_tp(class_name)} - fp: {metric.get_fp(class_name)} - "
-								f"fn: {metric.get_fn(class_name)} - tn: {metric.get_tn(class_name)} - precision: "
-								f"{metric.precision(class_name):.4f} - recall: {metric.recall(class_name):.4f} - "
-								f"accuracy: {metric.accuracy(class_name):.4f} - f1-score: "
-								f"{metric.f_score(class_name):.4f}"
-							)
-
-		result = Result(
-						main_score=metric.micro_avg_f_score(),
-						log_line=f"{metric.precision()}\t{metric.recall()}\t{metric.micro_avg_f_score()}",
-						log_header="PRECISION\tRECALL\tF1",
-						detailed_results=detailed_result,
-						name=metric.name,
-					)
-		
-		return result
 
 	def evaluate_langatt(
 		self,
@@ -3402,8 +3328,6 @@ class FastSequenceTagger(SequenceTagger):
 					for tag, gold in gold_tags:
 						if (tag, gold) not in predicted_tags:
 							metric.add_fn(tag)
-						else:
-							metric.add_tn(tag)
 
 				store_embeddings(batch, embeddings_storage_mode)
 
@@ -3420,7 +3344,7 @@ class FastSequenceTagger(SequenceTagger):
 			for class_name in metric.get_classes():
 				detailed_result += (
 					f"\n{class_name:<10} tp: {metric.get_tp(class_name)} - fp: {metric.get_fp(class_name)} - "
-					f"fn: {metric.get_fn(class_name)} - tn: {metric.get_tn(class_name)} - precision: "
+					f"fn: {metric.get_fn(class_name)} - precision: "
 					f"{metric.precision(class_name):.4f} - recall: {metric.recall(class_name):.4f} - "
 					f"accuracy: {metric.accuracy(class_name):.4f} - f1-score: "
 					f"{metric.f_score(class_name):.4f}"

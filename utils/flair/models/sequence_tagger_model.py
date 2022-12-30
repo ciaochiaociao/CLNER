@@ -2198,7 +2198,7 @@ class FastSequenceTagger(SequenceTagger):
 
 			batch_no: int = 0
 
-			metric = Metric("NER")
+			metric = Metric("Evaluation")
 
 			lines: List[str] = []
 			if out_path is not None:

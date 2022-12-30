@@ -4,6 +4,7 @@ Author: Xinyu Wang
 Contact: wangxy1@shanghaitech.edu.cn
 """
 
+from flair.training_utils import log_result
 from .distillation_trainer import *
 from transformers import (
 	AdamW,
@@ -73,6 +74,9 @@ class ModelFinetuner(ModelDistiller):
 		train_with_doc: bool = False,
 		pretrained_file_dict: dict = {},
 		sentence_level_pretrained_data: bool = False,
+
+		# cwhsu
+		main_metric: str = 'ner',
 	):
 		"""
 		Initialize a model trainer
@@ -368,6 +372,9 @@ class ModelFinetuner(ModelDistiller):
 			elif (base_path / "final-model.pt").exists():
 				self.model = self.model.load(base_path / "final-model.pt")
 				log.info(f"Using pretrained final model at {base_path}")
+		
+		# cwhsu
+		self.main_metric = main_metric
 
 	def train(
 		self,
@@ -1113,25 +1120,21 @@ class ModelFinetuner(ModelDistiller):
 								all_current_results, dev_loss = self.model.evaluate(
 									loader,
 									embeddings_storage_mode=embeddings_storage_mode,
+									add_surface_form=False,
+									eval_original=False,
 								)
 								
 								# for other tasks by cwhsu
 								if self.model.other_tasks:
 									all_current_results, _other_results = all_current_results
 									
-									for i, _other_result in enumerate(_other_results):
-										log_line(log)
-										log.info('=== ' + self.model.other_tasks[i]['name'] + ' ===')
-										log.info(_other_result.log_line)
-										log.info(_other_result.detailed_results)
-										log_line(log)
+									for _other_result in _other_results:
+										log_result(log, _other_result, verbose=False)
 
-								for res in all_current_results:
-									log.info(f"=== {res.name} ===")
-									log.info(res.log_line)
-									log.info(res.detailed_results)
+								for res in all_current_results.values():
+									log_result(log, res, verbose=False)
 								
-								current_result, *current_other_results = all_current_results
+								current_result = all_current_results.pop(self.main_metric)
 								result_dict[self.corpus.targets[index]]=current_result.main_score*100
 								print_sent+=self.corpus.targets[index]+'\t'+f'{result_dict[self.corpus.targets[index]]:.2f}'+'\t'
 								loss_list.append(dev_loss)
@@ -1173,7 +1176,22 @@ class ModelFinetuner(ModelDistiller):
 						test_loader,
 						base_path / "test.tsv",
 						embeddings_storage_mode=embeddings_storage_mode,
+						add_surface_form=False,
+						eval_original=False,
 					)
+
+					# for other tasks by cwhsu
+					if self.model.other_tasks:
+						all_current_results, _other_results = test_eval_result
+						
+						for _other_result in _other_results:
+							log_result(log, _other_result, verbose=False)
+
+					for res in all_current_results.values():
+						log_result(log, res, verbose=False)
+					
+					test_eval_result = all_current_results.pop(self.main_metric)
+
 					result_line += f"\t{test_loss}\t{test_eval_result.log_line}"
 					log.info(
 						f"TEST : loss {test_loss} - score {test_eval_result.main_score}"
@@ -2125,11 +2143,13 @@ class ModelFinetuner(ModelDistiller):
 			# print('total_length: ',total_length)
 		
 	def final_test(
-		self, base_path: Path, eval_mini_batch_size: int, num_workers: int = 8, overall_test: bool = True, quiet_mode: bool = False, nocrf: bool = False, predict_posterior: bool = False, debug: bool = False, keep_embedding: int = -1, sort_data=False,
+		self, base_path: Path, eval_mini_batch_size: int, num_workers: int = 8, overall_test: bool = True, quiet_mode: bool = False, nocrf: bool = False, predict_posterior: bool = False, debug: bool = False, keep_embedding: int = -1, sort_data=False, out_pathspec: str = None,
 	):
 
 		log_line(log)
 		
+		if out_pathspec is None:
+			out_pathspec = str(base_path / "{}.tsv")
 
 		self.model.eval()
 		
@@ -2170,27 +2190,18 @@ class ModelFinetuner(ModelDistiller):
 					print(x)
 				all_current_results, test_loss = self.model.evaluate(
 					loader,
-					out_path=base_path / f"{subset}.tsv",
+					out_path=Path(out_pathspec.format(subset)),
 					embeddings_storage_mode="cpu",
 				)
 				if self.model.other_tasks:
 					all_current_results, _other_results = all_current_results
 					
-					for i, _other_result in enumerate(_other_results):
-						log_line(log)
-						log.info('=== ' + self.model.other_tasks[i]['name'] + ' ===')
-						log.info(_other_result.log_line)
-						log.info(_other_result.detailed_results)
-						log_line(log)
+					for _other_result in _other_results:
+						log_result(log, _other_result)
 
-				for res in all_current_results:
-					log_line(log)
-					log.info(f'=== {res.name} ===')
-					log.info(res.log_line)
-					log.info(res.detailed_results)
-					log_line(log)
-
-				test_results, *current_other_results = all_current_results
+				for res in all_current_results.values():
+					log_result(log, res)
+				test_results = all_current_results.pop(self.main_metric)
 
 				# if self.model.embedding_selector:
 				#   print(sorted(loader[0].features.keys()))
@@ -2261,18 +2272,15 @@ class ModelFinetuner(ModelDistiller):
 				)
 				if self.model.other_tasks:
 					all_current_results, _other_results = all_current_results
-					
-					for i, _other_result in enumerate(_other_results):
-						log_line(log)
-						log.info('=== ' + self.model.other_tasks[i]['name'] + ' ===')
-						log.info(_other_result.log_line)
-						log.info(_other_result.detailed_results)
-						log_line(log)
-				for res in all_current_results:
-					log.info(f"=== {res.name} ===")
-					log.info(res.log_line)
-					log.info(res.detailed_results)
-				current_result, *current_other_results = all_current_results
+
+					for _other_result in _other_results:
+						log_result(log, _other_result)
+
+				for res in all_current_results.values():
+					log_result(log, res)
+
+				current_result = all_current_results.pop(self.main_metric)
+
 				if quiet_mode:
 					if keep_embedding>-1:
 						embedding_name = sorted(loader[0].features.keys())[keep_embedding].split()

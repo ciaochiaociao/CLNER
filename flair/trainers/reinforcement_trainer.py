@@ -206,7 +206,7 @@ class ReinforcementTrainer(ModelDistiller):
 					if dev_sample:
 						self.corpus.dev_list[i].sentences = self.corpus.dev_list[i].sentences[:down_sample_amount]
 						self.corpus.dev_list[i].reset_sentence_count
-		if direct_upsample_rate>0 or down_sample_amount:
+		if direct_upsample_rate>0 or down_sample_amount>0:
 			self.corpus._train: FlairDataset = ConcatDataset([data for data in self.corpus.train_list])
 			if config['train']['train_with_dev']:
 				self.corpus._dev: FlairDataset = ConcatDataset([data for data in self.corpus.dev_list])

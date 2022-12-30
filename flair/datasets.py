@@ -19,6 +19,13 @@ import pdb
 log = logging.getLogger("flair")
 
 
+def get_split_name(file):
+
+    m = re.match(r'^(train|dev|test|testa|testb)\.(tsv|txt)$', file)
+    if m:
+        return m.group(1)
+
+
 class ColumnCorpus(Corpus):
     def __init__(
         self,
@@ -62,13 +69,14 @@ class ColumnCorpus(Corpus):
                 file_name = file.name
                 if file_name.endswith(".gz") or file_name.endswith(".swp") or file_name.endswith(".pkl"):
                     continue
-                if "train" in file_name:
+                split_name = get_split_name(file_name)
+                if split_name == "train":
                     train_file = file
-                if "dev" in file_name:
+                if split_name == "dev":
                     dev_file = file
-                if "testa" in file_name:
+                if split_name == "testa":
                     dev_file = file
-                if "testb" in file_name:
+                if split_name == "testb":
                     test_file = file
 
             # if no test file is found, take any file with 'test' in name

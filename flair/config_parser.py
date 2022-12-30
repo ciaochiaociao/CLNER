@@ -26,7 +26,7 @@ log = logging.getLogger("flair")
 from flair.corpus_mapping import corpus_map,reverse_corpus_map
 dependency_tasks={'enhancedud', 'dependency', 'srl', 'ner_dp'}
 class ConfigParser:
-	def __init__(self, config, all=False, zero_shot=False, other_shot=False, predict=False, inference=False):
+	def __init__(self, config, all=False, zero_shot=False, other_shot=False, predict=False, inference=False, load_corpus_from_target_path=False):
 		self.full_corpus={'ner':'CONLL_03_GERMAN:CONLL_03:CONLL_03_DUTCH:CONLL_03_SPANISH', 'upos':'UD_GERMAN:UD_ENGLISH:UD_FRENCH:UD_ITALIAN:UD_DUTCH:UD_SPANISH:UD_PORTUGUESE:UD_CHINESE'}
 		# self.zeroshot_corpus={'ner':'PANX-TA:PANX-SL:PANX-PT:PANX-ID:PANX-HE:PANX-FR:PANX-FA:PANX-EU', 'upos':'UD_BASQUE:UD_DUTCH:UD_ARABIC:UD_RUSSIAN:UD_KOREAN:UD_CHINESE:UD_HINDI:UD_FINNISH'}
 		self.zeroshot_corpus={}
@@ -51,6 +51,7 @@ class ConfigParser:
 
 		self.target: str=self.get_target
 		self.tag_type = self.target
+		self.load_corpus_from_target_path = load_corpus_from_target_path
 		if all:
 			self.corpus: ListCorpus=self.get_full_corpus
 		elif zero_shot:
@@ -346,6 +347,14 @@ class ConfigParser:
 					corpus_name,idx=corpus.split('-')
 				else:
 					corpus_name = corpus
+				
+				if self.load_corpus_from_target_path:
+					self.config[self.target][corpus]['data_folder'] = self.get_target_path
+					self.config[self.target][corpus]['column_format'].update({
+						3: 'predicted',
+						4: 'predicted_score',
+					})
+					self.config[self.target][corpus]['tag_to_bioes'] = None
 				current_dataset=getattr(datasets,corpus_name)(**self.config[self.target][corpus])
 			else:
 				current_dataset=getattr(datasets,corpus)(tag_to_bioes=self.target)
