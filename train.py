@@ -102,7 +102,10 @@ if args.test and args.zeroshot:
 # pdb.set_trace()
 config = ConfigParser(config,all=args.all,zero_shot=args.zeroshot,other_shot=args.other,predict=args.predict,inference=args.inference,load_corpus_from_target_path=args.only_eval)
 os.makedirs(config.get_target_path, exist_ok=args.force)
-shutil.copy(args.config, config.get_target_path)
+try:
+	shutil.copy(args.config, config.get_target_path)
+except shutil.SameFileError:
+    pass
 # pdb.set_trace()
 
 from pprint import pprint
@@ -124,13 +127,12 @@ if args.only_eval:
 	log_handler = add_file_handler(log, config.get_target_path / "eval.log")
 	for dataset in ('train', 'dev', 'test'):
 		log.info(f"===== {dataset} =====")
-		dataset = getattr(config.get_corpus, dataset)
-		for params in [{}, {'use_surface_form': True}]:
-			metrics = get_all_metrics(dataset, remove_x=True, tag_type=config.get_target, pred_tag_type='predicted', orig_tag_type="predict", **params)
-			results = [get_result_from_metric(metric) for metric in metrics.values()]
-			for result in results:
-				log_result(log, result)
-	log.removeHandler
+		dataset = getattr(corpus, dataset)
+		metrics = get_all_metrics(dataset, config.get_target, add_surface_form=True, eval_original=True)
+		results = [get_result_from_metric(metric) for metric in metrics.values()]
+		for result in results:
+			log_result(log, result)
+	log.removeHandler(log_handler)
 	exit()
 
 student=config.create_student(nocrf=args.nocrf)
@@ -234,8 +236,10 @@ elif args.inference:
 					log.info('\n' + lines)
 
 			log.info('== evaluation ==')
-			log.info(test_results.log_line)
-			log.info(test_results.detailed_results)
+			for result_name, result in test_results.items():
+				log.info(f'=== {result_name} ===')
+				log.info(result.log_line)
+				log.info(result.detailed_results)
 
 			if not args.interactive:
 				break
@@ -279,7 +283,7 @@ elif args.test:
 		# keep_embedding = int(args.keep_embedding),
 		predict_posterior=args.predict_posterior,
 		# sort_data = not args.keep_order,
-		out_pathspec=str(config.get_target_path / 'eval_{}.tsv'),
+		out_pathspec=str(config.get_target_path / 'infer_{}.tsv'),
 	)
 	log.removeHandler(log_handler)
 elif args.parse or args.save_embedding:

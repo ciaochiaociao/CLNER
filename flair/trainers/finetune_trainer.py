@@ -2188,11 +2188,16 @@ class ModelFinetuner(ModelDistiller):
 					self.gpu_friendly_assign_embedding([loader])
 				for x in sorted(loader[0].features.keys()):
 					print(x)
+				
 				all_current_results, test_loss = self.model.evaluate(
 					loader,
 					out_path=Path(out_pathspec.format(subset)),
 					embeddings_storage_mode="cpu",
+					add_surface_form=False,
+					eval_original=True,
 				)
+				log_line(log)
+				log.info(f"============= {subset} =============")
 				if self.model.other_tasks:
 					all_current_results, _other_results = all_current_results
 					
@@ -2257,7 +2262,7 @@ class ModelFinetuner(ModelDistiller):
 					print(subcorpus.name,end=' ')
 					print(current_result.main_score,end=' ')
 
-		elif type(self.corpus) is ListCorpus:
+		elif type(self.corpus) is ListCorpus and len(self.corpus.test_list) > 1:
 			for index,subcorpus in enumerate(self.corpus.test_list):
 				log_line(log)
 				log.info('current corpus: '+self.corpus.targets[index])

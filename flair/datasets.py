@@ -23,6 +23,7 @@ def get_split_name(file):
 
     m = re.match(r'^(train|dev|test|testa|testb)\.(tsv|txt)$', file)
     if m:
+        # import pdb; pdb.set_trace()
         return m.group(1)
 
 
@@ -76,6 +77,8 @@ class ColumnCorpus(Corpus):
                     dev_file = file
                 if split_name == "testa":
                     dev_file = file
+                if split_name == "test":
+                    test_file = file
                 if split_name == "testb":
                     test_file = file
 
@@ -1112,14 +1115,26 @@ class ColumnDataset(FlairDataset):
             if print_once:
                 print('sent labels:')
                 print([label for label in sentence.labels])
-                for token in sentence.tokens[:30] + sentence.tokens[-20:]:
-                    print(token, end=' ')
-                    for name in self.column_name_map.values():
-                        print(token.get_tag(name).value, end=f' ({name}) ')
-                    print('\t | labels:', [label for label in token.labels], end=' ')
-                    if token.scope is not None:
-                        print('\tscope:', token.scope, end='')
-                    print()
+                i = 0
+                window = 6
+                _local_eos_idx = None
+                prev_i = -1
+                for i, token in enumerate(sentence.tokens):
+                    if token.scope == 'local_eos':
+                        _local_eos_idx = i
+                    if i < window or \
+                        (_local_eos_idx is not None and (abs(i - _local_eos_idx) < window/2)) or \
+                        i >= len(sentence.tokens) - window:
+                        if prev_i != i - 1:
+                            print('...')
+                        print(token, end=' ')
+                        for name in self.column_name_map.values():
+                            print(token.get_tag(name).value, end=f' ({name}) ')
+                        print('\t | labels:', [label for label in token.labels], end=' ')
+                        if token.scope is not None:
+                            print('\tscope:', token.scope, end='')
+                        print()
+                        prev_i = i
                 print()
                 print_once = False
             # input()

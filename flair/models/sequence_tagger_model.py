@@ -16,7 +16,7 @@ from flair.file_utils import cached_path
 
 from typing import List, Tuple, Union
 
-from flair.training_utils import Dejavuer, Metric, Result, add_to_metric, convert_labels_to_one_hot, get_all_metrics, get_result_from_metric, store_embeddings
+from flair.training_utils import Dejavuer, Metric, Result, add_to_metric, convert_labels_to_one_hot, get_all_metrics, get_metrics, get_result_from_metric, store_embeddings
 from .biaffine_attention import BiaffineAttention
 
 from tqdm import tqdm
@@ -3127,7 +3127,7 @@ class FastSequenceTagger(SequenceTagger):
 
 		# cwhsu
 		add_surface_form = False,
-		eval_original = True,
+		eval_original = False,
 	):
 		with torch.no_grad():
 			eval_loss = 0
@@ -3207,6 +3207,7 @@ class FastSequenceTagger(SequenceTagger):
 				for task_params in self.other_tasks:
 					other_metrics[task_params['name']] = Metric(task_params['name'])
 
+			all_current_results = {}
 			if not speed_test:
 				for batch in data_loader:
 					if len(self.other_tasks):
@@ -3215,15 +3216,17 @@ class FastSequenceTagger(SequenceTagger):
 							self._add_to_metric(batch, other_labels[task], task_params, other_metrics[task], lines)
 
 				data = [example for batch in data_loader for example in batch]
-				metrics = get_all_metrics(data, self.remove_x, self.tag_type, "predicted")
-				if add_surface_form:
-					metrics.update(get_all_metrics(data, self.remove_x, self.tag_type, "predicted", use_surface_form=True, suffix=' (Surface Form)'))
-				
-				if eval_original:
-					metrics.update(get_all_metrics(data, self.remove_x, self.tag_type, "predict", use_surface_form=True, suffix=' [Original]'))
-					if add_surface_form:
-						metrics.update(get_all_metrics(data, self.remove_x, self.tag_type, "predict", use_surface_form=True, suffix=' [Original] (Surface Form)'))
+				metrics = get_all_metrics(data, self.tag_type, add_surface_form, eval_original)
 
+				_other_results = []
+				for task_params in self.other_tasks:
+					name = task_params['name']
+					metric = metrics[name]
+					_other_results.append(get_result_from_metric(metric))
+
+				for name, m in metrics.items():
+					all_current_results[name] = get_result_from_metric(m)  # refactored by cwhsu
+     
 			if speed_test:
 				end_time = time.time()
 				print(data_loader.num_examples/(end_time-start_time))
@@ -3233,17 +3236,8 @@ class FastSequenceTagger(SequenceTagger):
 			# if out_path is not None:
 			#   with open(out_path, "w", encoding="utf-8") as outfile:
 			#       outfile.write("".join(lines))
-
-			all_current_results = {}
-			for name, m in metrics.items():
-				all_current_results[name] = get_result_from_metric(m)  # refactored by cwhsu
 			
 			# === other tasks by cwhsu ===
-			_other_results = []
-			for task_params in self.other_tasks:
-				name = task_params['name']
-				metric = metrics[name]
-				_other_results.append(get_result_from_metric(metric))
 
 			if len(self.other_tasks):
 				return (all_current_results, _other_results), eval_loss

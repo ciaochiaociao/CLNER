@@ -398,8 +398,45 @@ def store_teacher_predictions(sentences: List[Sentence], storage_mode: str):
             sentence.store_teacher_prediction(storage_mode)
 
 
-def get_all_metrics(batch, remove_x, tag_type, pred_tag_type, orig_tag_type="predict", use_surface_form=False, cache_for_dejavuer=None, suffix='') -> List[Metric]:
+def get_all_metrics(data, tag_type, add_surface_form=False, eval_original=False):
+    metrics = {}
+    params_dicts = [
+        {  # recovered
+            'pred_tag_type': 'predicted',
+            'orig_tag_type': 'predict',  # used for keeping original if no nonlocals
+        },
+    ]
+    if add_surface_form:
+        params_dicts.append({  # recovered (surface form)
+            'pred_tag_type': 'predicted',
+            'orig_tag_type': 'predict',
+            'use_surface_form': True,
+            'suffix': ' (Surface Form)'
+        })
+    if eval_original:
+        params_dicts.append({  # original performance without recovering
+            'pred_tag_type': 'predict',
+            'suffix': ' [Original]',
+        })
+        if add_surface_form:
+            params_dicts.append({  # original performance without recovering
+                'pred_tag_type': 'predict',
+                'use_surface_form': True,
+                'suffix': ' [Original] (Surface Form)',
+            })
+        
+    for params in params_dicts:
+        _metrics = get_metrics(data, remove_x=True, tag_type=tag_type, **params)
+        assert len(set(_metrics.keys()).intersection(set(metrics.keys()))) == 0
+        metrics.update(_metrics)
+    return metrics
 
+
+def get_metrics(batch, remove_x, tag_type, pred_tag_type, orig_tag_type=None, use_surface_form=False, cache_for_dejavuer=None, suffix='') -> List[Metric]:
+    """
+    Args
+        - orig_tag_type: original tag name used for keeping original if no nonlocals; do not keep anyhow if set to None
+    """
     metrics = {
         "ner": "NER",
         "only_ex_w_nlc": "Only Examples with Nonlocals",
@@ -416,21 +453,19 @@ def get_all_metrics(batch, remove_x, tag_type, pred_tag_type, orig_tag_type="pre
         metrics["keep_orig_if_no_nlc"] = "Keep Original Predictions If No Nonlocals"
         _metric_params["keep_orig_if_no_nlc"] = {"keep_orig_if_no_nonlocals": True, "orig_tag_type": orig_tag_type}
 
-
+    # suffix the key name
+    if suffix != '':
+        for name in list(metrics.keys()):
+            new_name = name + suffix
+            _metric_params[new_name] = _metric_params.pop(name)
+            metrics[new_name] = metrics.pop(name) + suffix
 
     if use_surface_form:
-        _new_metrics = {}
-        for name, desc in metrics.items():
-            _d = deepcopy(_metric_params[name])
-            _d.update({
+        for name in metrics.keys():
+            _metric_params[name].update({
                     'surface_form': True, 
                     'dejavuer': Dejavuer(cache_for_dejavuer),
                 })
-
-            new_name = name + suffix
-            _metric_params[new_name] = _d
-            _new_metrics[new_name] = desc + suffix
-        metrics.update(_new_metrics)
     
     for name in metrics.keys():
         metrics[name] = Metric(metrics[name])
@@ -468,7 +503,7 @@ def add_to_metric(
         # solution: add position into the tuple
         # make list of gold tags
         gold_tags = [
-            (tag.tag, str(tag), tag.tokens[0].idx) for tag in sentence.get_spans(gold_tag_type)
+            (tag.tag, str(tag)) for tag in sentence.get_spans(gold_tag_type)
         ]
         # make list of predicted tags
         _predict_tag_type = predict_tag_type
@@ -477,7 +512,7 @@ def add_to_metric(
             if not sentence.has_nonlocals:
                 _predict_tag_type = orig_tag_type
         predicted_tags = [
-            (tag.tag, str(tag), tag.tokens[0].idx) for tag in sentence.get_spans(_predict_tag_type)
+            (tag.tag, str(tag)) for tag in sentence.get_spans(_predict_tag_type)
         ]
 
         if remove_x:
@@ -501,20 +536,20 @@ def add_to_metric(
             gold_tags = new_gold_tags
 
         # check for true positives, false positives and false negatives
-        for tag, prediction, pos in predicted_tags:
+        for tag, prediction in predicted_tags:
             if surface_form and dejavuer.dejavu((tag, prediction)):
                 continue
 
-            if (tag, prediction, pos) in gold_tags:
+            if (tag, prediction) in gold_tags:
                 metric.add_tp(tag)
             else:
                 metric.add_fp(tag)
 
-        for tag, gold, pos in gold_tags:
+        for tag, gold in gold_tags:
             if surface_form and dejavuer.dejavu((tag, gold)):
                 continue
 
-            if (tag, gold, pos) not in predicted_tags:
+            if (tag, gold) not in predicted_tags:
                 metric.add_fn(tag)
     return metric
 
