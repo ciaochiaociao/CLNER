@@ -732,6 +732,7 @@ class SequenceTagger(flair.nn.Model):
 			eval_loss = 0
 
 			batch_no: int = 0
+			num_sents: int = 0
 
 			metric = Metric("Evaluation")
 
@@ -748,6 +749,7 @@ class SequenceTagger(flair.nn.Model):
 				eval_loss += loss
 
 				for (sentence, sent_tags) in zip(batch, tags):
+					num_sents + 1
 					for (token, tag) in zip(sentence.tokens, sent_tags):
 						token: Token = token
 						token.add_tag_label("predicted", tag)
@@ -809,6 +811,7 @@ class SequenceTagger(flair.nn.Model):
 				log_header="PRECISION\tRECALL\tF1",
 				detailed_results=detailed_result,
 			)
+			result.num_sents = num_sents
 
 			return result, eval_loss
 

@@ -2180,6 +2180,7 @@ class ModelFinetuner(ModelDistiller):
 				embedding.fine_tune = False
 		if overall_test:
 			for subset in ('train', 'dev', 'test'):
+				log.info(f"=== {subset} ===")
 				loader=ColumnDataLoader(list(getattr(self.corpus, subset)),eval_mini_batch_size, use_bert=self.use_bert,tokenizer=self.bert_tokenizer, model = self.model, sentence_level_batch = self.sentence_level_batch, sort_data=sort_data)
 				loader.assign_tags(self.model.tag_type,self.model.tag_dictionary)
 				# import pdb; pdb.set_trace()

@@ -582,6 +582,8 @@ def get_result_from_metric(metric: Metric):
 def log_result(log, result: Result, verbose=True):
     log_line(log)
     log.info(f"=== {result.name} ===")
+    if hasattr(result, 'num_sents'):
+        log.info(f"# examples: {result.num_sents}")
     log.info(result.log_line)
     if verbose:
         log.info(result.detailed_results)

@@ -1160,7 +1160,7 @@ class ColumnDataset(FlairDataset):
                 line = file.readline()
                 sentence: Sentence = Sentence()
                 while line:
-                    if self.comment_symbol is not None and line.startswith("#"):
+                    if self.comment_symbol is not None and line.startswith(self.comment_symbol):
                         line = file.readline()
                         continue
 
