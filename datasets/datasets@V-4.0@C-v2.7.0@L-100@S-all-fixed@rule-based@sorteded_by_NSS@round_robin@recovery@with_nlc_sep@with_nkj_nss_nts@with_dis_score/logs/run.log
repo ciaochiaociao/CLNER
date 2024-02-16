@@ -1,0 +1,53 @@
+=== params ===
+always_add_eos: false
+comment_symbol: '##'
+data_augmentation: !!python/tuple []
+dis_score_encoding: true
+fields:
+  gold:
+    local_eos: B-X
+    local_token: rec_gold_tag
+    nonlocal_eos: B-X
+    nonlocal_token: B-X
+  predict:
+    local_eos: <EOS>
+    local_token: predict_tag
+    nonlocal_eos: <EOS>
+    nonlocal_token: ner_tag
+  score_code:
+    local_eos: <EOS>
+    local_token: predict_tag_score_encoding
+    nonlocal_eos: <EOS>
+    nonlocal_token: ner_tag_score_encoding
+  text:
+    local_eos: <EOS>
+    local_token: text
+    nonlocal_eos: <EOS>
+    nonlocal_token: text
+force: true
+fourth_comment_symbol: '#####'
+max_tokens_per_example: 510
+min_len_per_nonlocal: 30
+output_dir: /home/cwhsu/.flair/datasets@V-4.0@C-v2.7.0@L-100@S-all-fixed@rule-based@sorteded_by_NSS@round_robin@recovery@with_nlc_sep@with_nkj_nss_nts@with_dis_score
+prob_to_drop_aug: 0.0
+query_strategy: mention_and_sent
+queue_nonlocals: round_robin
+second_comment_symbol: '###'
+strategy_for_preserve_ex: null
+subsets_for_new_recovery_tags: !!python/tuple
+- train
+third_comment_symbol: '####'
+with_local_sent_labels: true
+with_nonlocal_sent_labels: true
+with_nonlocal_token_labels: true
+with_nss: prediction+no_selecting_but_sorting
+
+>> subset: train
+	count_sent: 3394
+	count_long_ex: 2080
+>> subset: dev
+	count_sent: 1009
+	count_long_ex: 978
+>> subset: test
+	count_sent: 1287
+	count_long_ex: 953
