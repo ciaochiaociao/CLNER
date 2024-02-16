@@ -1,0 +1,24 @@
+=== params ===
+always_add_eos: false
+force: true
+local_eos: <EOS>
+local_eos_pred_tag: null
+max_tokens_per_example: 512
+min_len_per_nonlocal: 30
+nonlocal_sep: <EOS>
+nonlocal_sep_pred_tag: null
+output_dir: /home/cwhsu/.flair/datasets@V-4.0@C-v2.7.0@L-100@S-all-fixed@rule-based@selected_by_NSS@round_robin@use_nlc_sep
+output_pred_tags: false
+query_strategy: mention_and_sent
+queue_nonlocals: round_robin
+with_nss: prediction
+
+>> subset: train
+	count_sent: 3394
+	count_long_ex: 819
+>> subset: dev
+	count_sent: 1009
+	count_long_ex: 367
+>> subset: test
+	count_sent: 1287
+	count_long_ex: 298
