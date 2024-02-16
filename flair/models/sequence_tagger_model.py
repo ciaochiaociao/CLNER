@@ -3131,7 +3131,9 @@ class FastSequenceTagger(SequenceTagger):
 		# cwhsu
 		add_surface_form = False,
 		eval_original = False,
+  		all_tag_prob = False,
 	):
+		print('evaluating ...')
 		with torch.no_grad():
 			eval_loss = 0
 
@@ -3167,23 +3169,44 @@ class FastSequenceTagger(SequenceTagger):
 						other_labels[task_params['name']].append(predicted_labels)
 					# === other tasks by cwhsu ===
 
-					tags, _ = self._obtain_labels(features, batch)
-
+					tags, tags_dist = self._obtain_labels(features, batch, get_all_tags=all_tag_prob)
+					# tags_dist here only return the tags distribution for the tokens in the local sentence,
+					# where the tags here contain all including non-local tokens instead.
+     
+     
+					if all_tag_prob:
+						assert len(tags_dist) != 0
 				if not speed_test:
 					eval_loss += loss
-					for (sentence, sent_tags) in zip(batch, tags):
-						for (token, tag) in zip(sentence.tokens, sent_tags):
+					assert len(batch) == len(tags)
+					for i in range(len(batch)):
+						sentence = batch[i]
+						sent_tags = tags[i]
+						if all_tag_prob:
+							sent_tags_dist = tags_dist[i]
+						for j, (token, tag) in enumerate(zip(sentence.tokens, sent_tags)):
 							token: Token = token
 							token.add_tag_label("predicted", tag)
 
+							all_tag_prob_str = ""
+							if all_tag_prob:
+								if j < len(sent_tags_dist):  # right now, tags_dist only contains the tag distribution for the local tokens, while i could be outside the local scope
+									token.add_tags_proba_dist("predicted", sent_tags_dist[j])
+									token_tags_dist = token.get_tags_proba_dist('predicted')
+									for _tag in token_tags_dist:
+										all_tag_prob_str += " " + _tag.value + " " + str(_tag.score)
+								else:  # outside the local scope
+									all_tag_prob_str = (" " + " ") * len(token_tags_dist)  # hack: use the previous token_tags_dist (in the outer loop), i.e., the token_tags_dist of the last token
 							# append both to file for evaluation
-							eval_line = "{} {} {} {} {}\n".format(
+							eval_line = "{} {} {} {} {}".format(
 								token.text,
 								token.get_tag(self.tag_type).value,
 								token.get_tag('predict').value,
 								tag.value,
 								tag.score,
 							)
+							eval_line += all_tag_prob_str
+							eval_line += '\n'
 							# lines.append(eval_line)
 							if out_path is not None:
 								outfile.write(eval_line)
@@ -3236,6 +3259,7 @@ class FastSequenceTagger(SequenceTagger):
 			eval_loss /= batch_no
 			if out_path is not None:
 				outfile.close()
+				log.info("Evaluation file has been written to: " + str(out_path))
 			# if out_path is not None:
 			#   with open(out_path, "w", encoding="utf-8") as outfile:
 			#       outfile.write("".join(lines))

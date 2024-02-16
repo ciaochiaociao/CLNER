@@ -10,7 +10,7 @@ import flair.embeddings as Embeddings
 from flair.training_utils import EvaluationMetric, add_file_handler, get_all_metrics, get_result_from_metric, log_result
 from flair.visual.training_curves import Plotter
 # initialize sequence tagger
-from flair.models import SequenceTagger
+# from flair.models import SequenceTagger
 from pathlib import Path
 import argparse
 import yaml
@@ -67,7 +67,8 @@ parser.add_argument('--inference', action='store_true')
 parser.add_argument('--inference_verbose', '-v', action='store_true')
 parser.add_argument('--interactive', '-i', action='store_true')
 parser.add_argument('--only_eval', action='store_true')
-
+parser.add_argument('--test_on_subsets', default='train,dev,test', help='train,dev,test (by default)')
+parser.add_argument('--all_tag_prob', action='store_true')
 
 def count_parameters(model):
 	import numpy as np
@@ -135,7 +136,14 @@ if args.only_eval:
 	log.removeHandler(log_handler)
 	exit()
 
+if args.inference:
+    if config.config.get('load_pretrained', False):
+        config.config['load_pretrained'] = False
+    if 'pretrained_model' in config.config:
+    	del config.config['pretrained_model']
+
 student=config.create_student(nocrf=args.nocrf)
+print(student)
 log.info(f"Model Size: {count_parameters(student)}")
 
 teacher_func=config.create_teachers
@@ -200,8 +208,11 @@ if args.test_speed:
 elif args.inference:
 	from flair.custom_data_loader import ColumnDataLoader
 	import torch
-	student = student.load(config.get_target_path / "best-model.pt")
+	__model_path = config.get_target_path / "best-model.pt"
+	logging.info(f"loading the model file from {str(__model_path)} for doing inference (--inference)")
+	student = student.load(__model_path)
 	student.eval()
+	print(f"{student}\n")
 	__corpus = corpus
 	infer_cache_path = config.get_target_path / 'inference' / 'cache.log'
 
@@ -225,6 +236,8 @@ elif args.inference:
 					log.info('datetime:' + str(ctime(time())))
 					log.info('command:' + repr(sys.argv))
 
+					log.info('== gold ==')
+					log.info(sent.to_tagged_string('ner'))
 					log.info('== original ==')
 					log.info(sent.to_tagged_string('predict'))
 					log.info('== recovered ==')
@@ -236,10 +249,16 @@ elif args.inference:
 					log.info('\n' + lines)
 
 			log.info('== evaluation ==')
-			for result_name, result in test_results.items():
-				log.info(f'=== {result_name} ===')
-				log.info(result.log_line)
-				log.info(result.detailed_results)
+			# ------ 2023/10/24
+			metrics = get_all_metrics(__dataset, config.get_target, add_surface_form=False, eval_original=False)
+			results = [get_result_from_metric(metric) for metric in metrics.values()]
+			for result in results:
+				log_result(log, result)
+			# for result_name, result in test_results.items():
+			# 	log.info(f'=== {result_name} ===')
+			# 	log.info(result.log_line)
+			# 	log.info(result.detailed_results)
+			# ------
 
 			if not args.interactive:
 				break
@@ -284,6 +303,8 @@ elif args.test:
 		predict_posterior=args.predict_posterior,
 		# sort_data = not args.keep_order,
 		out_pathspec=str(config.get_target_path / 'infer_{}.tsv'),
+		subsets=tuple(args.test_on_subsets.strip().split(',')),
+  		all_tag_prob=args.all_tag_prob,
 	)
 	log.removeHandler(log_handler)
 elif args.parse or args.save_embedding:

@@ -31,7 +31,8 @@ run=4
 train_config_file=config/$dataset_name$run.yaml
 
 model_path_suffix=$dataset_name$run
-model_path=/home/cwhsu/.models/xlmr-first_20epoch_2batch_2accumulate_0.000005lr_10000lrrate_eng_monolingual_crf_fast_norelearn_sentbatch_sentloss_finetune_nodev_$model_path_suffix
+# model_path=/home/cwhsu/.models/xlmr-first_20epoch_2batch_2accumulate_0.000005lr_10000lrrate_eng_monolingual_crf_fast_norelearn_sentbatch_sentloss_finetune_nodev_$model_path_suffix
+model_path=/home/hlv8980/recovery_on_172/resources/taggers/'A21->A22@ep-5->A23'
 dataset_path=tmp_dataset
 output_result_path=tmp_eval_results
 

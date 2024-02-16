@@ -21,6 +21,8 @@ from .utils.from_params import Params
 from . import logging
 import pdb
 import copy
+import os
+
 log = logging.getLogger("flair")
 
 from flair.corpus_mapping import corpus_map,reverse_corpus_map
@@ -219,11 +221,17 @@ class ConfigParser:
 		#
 		if pretrained:
 			if is_student and 'pretrained_model' in config:
+				log.info('Use the pretrained model' + config['target_dir'] + '/' + config['pretrained_model'])
 				base_path=Path(config['target_dir'])/config['pretrained_model']
 			else:
+				log.info('Use the model in target_dir' + config['target_dir'] + '/' + config['model_name'])
 				base_path=Path(config['target_dir'])/config['model_name']
-
-			if (base_path / "best-model.pt").exists():
+			use_final = config.get('use_final_model_for_pretrained', False)
+			if use_final:
+				log.info('Use the final model')
+			else:
+				log.info('Use the best model')
+			if not use_final and (base_path / "best-model.pt").exists():
 				log.info('Loading pretraining best model')
 				tagger = tagger.load(base_path / "best-model.pt")
 			elif (base_path / "final-model.pt").exists():
@@ -506,7 +514,7 @@ class ConfigParser:
 		return corpus
 		
 	@property
-	def get_inference_datasets(self, default_file_path='/home/cwhsu/.flair/inference@with_dis_score/test.txt'):
+	def get_inference_datasets(self, default_file_path=os.path.expanduser('~') + '/.flair/inference@with_dis_score/test.txt'):
 
 		inference_fpath: Path = self.get_target_path / 'inference' / 'input.tsv'
 		if not inference_fpath.exists():

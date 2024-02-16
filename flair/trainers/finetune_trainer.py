@@ -88,6 +88,7 @@ class ModelFinetuner(ModelDistiller):
 		:param optimizer_state: Optimizer state (necessary if continue training from checkpoint)
 		:param scheduler_state: Scheduler state (necessary if continue training from checkpoint)
 		:param use_tensorboard: If True, writes out tensorboard information
+		:param main_metric: 'ner' / 'only_ex_w_nlc' / 'only_ex_wo_nlc'
 		"""
 		# if teachers is not None:
 		#   assert len(teachers)==len(corpus.train_list), 'Training data and teachers should be the same length now!'
@@ -558,6 +559,10 @@ class ModelFinetuner(ModelDistiller):
 		# pdb.set_trace()
 		# other_params = {name:param for name,param in self.model.named_parameters() if 'embeddings' not in name}
 		# import pdb; pdb.set_trace()
+		log.info('finetune_params: ' + str(finetune_params))
+		log.info('other_params: ' + str(other_params))
+		log.info('custom_embed_params: ' + str(custom_embed_params))
+		input()
 		if len(self.update_params_group)>0:
 			optimizer: torch.optim.Optimizer = self.optimizer(
 				[
@@ -787,7 +792,9 @@ class ModelFinetuner(ModelDistiller):
 
 				# get new learning rate
 				if self.model.use_crf:
+					input(learning_rate)
 					learning_rate = optimizer.param_groups[0]["lr"]
+					input(learning_rate)
 				else:
 					for group in optimizer.param_groups:
 						learning_rate = group["lr"]
@@ -811,6 +818,8 @@ class ModelFinetuner(ModelDistiller):
 				# stop training if learning rate becomes too small
 				if learning_rate < min_learning_rate and warmup_steps <= 0:
 					log_line(log)
+					log.info("min_learning_rate: " + str(min_learning_rate))
+					log.info("learning_rate: " + str(learning_rate))
 					log.info("learning rate too small - quitting training!")
 					log_line(log)
 					break
@@ -997,8 +1006,8 @@ class ModelFinetuner(ModelDistiller):
 								else:
 									loss.backward()
 						# import pdb; pdb.set_trace()
-					# except Exception:
-					except PermissionError:  # for debugging by cwhsu
+					except Exception:
+					# except PermissionError:  # for debugging by cwhsu
 						traceback.print_exc()
 						log.info(f"{[len(x) for x in student_input]}")
 						log.info(f"{student_input}")
@@ -2143,7 +2152,7 @@ class ModelFinetuner(ModelDistiller):
 			# print('total_length: ',total_length)
 		
 	def final_test(
-		self, base_path: Path, eval_mini_batch_size: int, num_workers: int = 8, overall_test: bool = True, quiet_mode: bool = False, nocrf: bool = False, predict_posterior: bool = False, debug: bool = False, keep_embedding: int = -1, sort_data=False, out_pathspec: str = None,
+		self, base_path: Path, eval_mini_batch_size: int, num_workers: int = 8, overall_test: bool = True, quiet_mode: bool = False, nocrf: bool = False, predict_posterior: bool = False, debug: bool = False, keep_embedding: int = -1, sort_data=False, out_pathspec: str = None, subsets: tuple = ('train', 'dev', 'test'), all_tag_prob = False,
 	):
 
 		log_line(log)
@@ -2179,7 +2188,7 @@ class ModelFinetuner(ModelDistiller):
 			if (hasattr(embedding,'fine_tune') and embedding.fine_tune):
 				embedding.fine_tune = False
 		if overall_test:
-			for subset in ('train', 'dev', 'test'):
+			for subset in subsets:
 				log.info(f"=== {subset} ===")
 				loader=ColumnDataLoader(list(getattr(self.corpus, subset)),eval_mini_batch_size, use_bert=self.use_bert,tokenizer=self.bert_tokenizer, model = self.model, sentence_level_batch = self.sentence_level_batch, sort_data=sort_data)
 				loader.assign_tags(self.model.tag_type,self.model.tag_dictionary)
@@ -2196,6 +2205,7 @@ class ModelFinetuner(ModelDistiller):
 					embeddings_storage_mode="cpu",
 					add_surface_form=False,
 					eval_original=True,
+					all_tag_prob=all_tag_prob,
 				)
 				log_line(log)
 				log.info(f"============= {subset} =============")
